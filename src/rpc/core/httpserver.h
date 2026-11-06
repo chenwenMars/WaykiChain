@@ -8,6 +8,7 @@
 #include <string>
 #include <stdint.h>
 #include <functional>
+#include "netbase.h"
 
 static const int32_t DEFAULT_HTTP_THREADS        = 4;
 static const int32_t DEFAULT_HTTP_WORKQUEUE      = 16;
@@ -26,6 +27,13 @@ bool InitHTTPServer();
  * This is separate from InitHTTPServer to give users race-condition-free time
  * to register their handlers between InitHTTPServer and StartHTTPServer.
  */
+
+/**
+ * Finalize HTTP Server
+ * Call this before process exist
+ */
+void FinalizeHTTPServer();
+
 void StartHTTPServer();
 /** Interrupt HTTP server threads */
 void InterruptHTTPServer();

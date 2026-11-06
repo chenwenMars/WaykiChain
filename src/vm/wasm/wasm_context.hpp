@@ -7,7 +7,7 @@
 #include <map>
 #include <chrono>
 
-#include "tx/wasmcontracttx.h"
+#include "tx/universaltx.h"
 #include "wasm/types/inline_transaction.hpp"
 #include "wasm/wasm_interface.hpp"
 #include "wasm/datastream.hpp"
@@ -21,15 +21,15 @@ using namespace std;
 using namespace wasm;
 namespace wasm {
 
-    typedef CNickID nick_name;
-    class wasm_context;
+    // bool get_native_contract_abi(uint64_t contract, std::vector<char>& abi);
+    // bool is_native_contract(uint64_t contract);
 
     class wasm_context : public wasm_context_interface {
 
     public:
-        wasm_context(CWasmContractTx &ctrl, inline_transaction &t, CCacheWrapper &cw,
+        wasm_context(CUniversalTx &ctrl, inline_transaction &t, CCacheWrapper &cw,
                      vector <CReceipt> &receipts_in, bool mining, uint32_t depth = 0)
-                : trx(t), control_trx(ctrl), database(cw), receipts(receipts_in), recurse_depth(depth) {
+                : trx_cord(ctrl.txCord), trx(t), control_trx(ctrl), database(cw), receipts(receipts_in), recurse_depth(depth) {
             reset_console();
         };
 
@@ -38,11 +38,12 @@ namespace wasm {
         };
 
     public:
-        void                  initialize();
-        void                  execute(inline_transaction_trace &trace);
-        void                  execute_one(inline_transaction_trace &trace);
-        bool                  has_permission_from_inline_transaction(const permission &p);
-        std::vector <uint8_t> get_code(const uint64_t& account);
+        void initialize();
+        void execute(inline_transaction_trace &trace);
+        void execute_one(inline_transaction_trace &trace);
+        bool has_permission_from_inline_transaction(const permission &p);
+        bool get_code(const uint64_t& contract, std::vector <uint8_t> &code, uint256 &hash);
+
 // Console methods:
     public:
         void                      reset_console();
@@ -53,7 +54,7 @@ namespace wasm {
     public:
 
         void        execute_inline   (const inline_transaction& t);
-        void        require_recipient(const uint64_t& recipient  );
+        void        notify_recipient (const uint64_t& recipient  );
         bool        has_recipient    (const uint64_t& account    ) const;
 
         uint64_t    receiver() { return _receiver;    }
@@ -63,50 +64,51 @@ namespace wasm {
         const char* get_action_data()      { return trx.data.data(); }
         uint32_t    get_action_data_size() { return trx.data.size(); }
 
-        bool        is_account   (const uint64_t& account) const ;
-        void        require_auth (const uint64_t& account) const ;
+        bool        is_account   (const uint64_t& account) const;
+        void        require_auth (const uint64_t& account) const;
         void        require_auth2(const uint64_t& account, const uint64_t& permission) const {}
-        bool        has_authorization(const uint64_t& account) const ;
+        bool        has_authorization(const uint64_t& account) const;
         uint64_t    pending_block_time() { return control_trx.pending_block_time; }
-        void        exit      () { wasmif.exit(); }
+        TxID        get_txid()  { return control_trx.GetHash(); }
+        uint64_t    get_maintainer(const uint64_t& contract);
+        void        exit    ()  { wasmif.exit(); }
+        bool        get_system_asset_price(uint64_t base, uint64_t quote, std::vector<char>& price);
 
         bool set_data( const uint64_t& contract, const string& k, const string& v ) {
-            CAccount   contract_account;
-            wasm::name contract_name = wasm::name(contract);
-            CHAIN_ASSERT( database.accountCache.GetAccount(nick_name(contract), contract_account),
-                          account_access_exception,
+            CUniversalContractStore contractStore;
+            CHAIN_ASSERT( database.contractCache.GetContract(CRegID(contract), contractStore),
+                          contract_exception,
                           "contract '%s' does not exist",
-                          contract_name.to_string().c_str())
+                          wasm::regid(contract).to_string())
 
-            return database.contractCache.SetContractData(contract_account.regid, k, v);
+            return database.contractCache.SetContractData(CRegID(contract), k, v);
         }
 
         bool get_data( const uint64_t& contract, const string& k, string &v ) {
-            CAccount   contract_account;
-            wasm::name contract_name = wasm::name(contract);
-            CHAIN_ASSERT( database.accountCache.GetAccount(nick_name(contract), contract_account),
-                          account_access_exception,
+            CUniversalContractStore contractStore;
+            CHAIN_ASSERT( database.contractCache.GetContract(CRegID(contract), contractStore),
+                          contract_exception,
                           "contract '%s' does not exist",
-                          contract_name.to_string().c_str())
+                          wasm::regid(contract).to_string())
 
-            return database.contractCache.GetContractData(contract_account.regid, k, v);
+            return database.contractCache.GetContractData(CRegID(contract), k, v);
         }
 
         bool erase_data( const uint64_t& contract, const string& k ) {
-            CAccount   contract_account;
-            wasm::name contract_name = wasm::name(contract);
-            CHAIN_ASSERT( database.accountCache.GetAccount(nick_name(contract), contract_account),
-                          account_access_exception,
+            CUniversalContractStore contractStore;
+            CHAIN_ASSERT( database.contractCache.GetContract(CRegID(contract), contractStore),
+                          contract_exception,
                           "contract '%s' does not exist",
-                          contract_name.to_string().c_str())
+                          wasm::regid(contract).to_string())
 
-            return database.contractCache.EraseContractData(contract_account.regid, k);
+            return database.contractCache.EraseContractData(CRegID(contract), k);
         }
 
         std::vector<uint64_t> get_active_producers();
 
         bool contracts_console() {
-            return SysCfg().GetBoolArg("-contracts_console", false) && control_trx.transaction_status == transaction_status_type::validating;
+            return SysCfg().GetBoolArg("-contracts_console", false) &&
+                   control_trx.context_type == TxExecuteContextType::VALIDATE_MEMPOOL;
         }
 
         void console_append(const string& val) {
@@ -114,26 +116,31 @@ namespace wasm {
         }
 
         vm::wasm_allocator* get_wasm_allocator() { return &wasm_alloc; }
-        bool                is_memory_in_wasm_allocator ( const uint64_t& p ) { 
-            return wasm_alloc.is_in_range(reinterpret_cast<const char*>(p)); 
+        bool                is_memory_in_wasm_allocator ( const uint64_t& p ) {
+            return wasm_alloc.is_in_range(reinterpret_cast<const char*>(p));
         }
         std::chrono::milliseconds get_max_transaction_duration() { return control_trx.get_max_transaction_duration(); }
         void                      update_storage_usage( const uint64_t& account, const int64_t& size_in_bytes);
         void                      pause_billing_timer ()  { control_trx.pause_billing_timer();  };
         void                      resume_billing_timer()  { control_trx.resume_billing_timer(); };
 
-    public:
-        inline_transaction&        trx;
-        CWasmContractTx&           control_trx;
-        CCacheWrapper&             database;
-        vector<CReceipt>&          receipts;
-        uint32_t                   recurse_depth;
-        vector<uint64_t>           notified;
-        vector<inline_transaction> inline_transactions;
+        void emit_result(const string_view &name, const string_view &type, const string_view &value) override {
+            CHAIN_ASSERT( false, contract_exception, "%s() only used for rpc", __func__)
+        }
 
-        wasm::wasm_interface       wasmif;
-        vm::wasm_allocator         wasm_alloc;
-        uint64_t                   _receiver;
+    public:
+        CTxCord&                    trx_cord;
+        inline_transaction&         trx;
+        CUniversalTx&               control_trx;
+        CCacheWrapper&              database;
+        vector<CReceipt>&           receipts;
+        uint32_t                    recurse_depth;
+        vector<uint64_t>            notified;
+        vector<inline_transaction>  inline_transactions;
+
+        wasm::wasm_interface        wasmif;
+        vm::wasm_allocator          wasm_alloc;
+        uint64_t                    _receiver;
 
     private:
         std::ostringstream         _pending_console_output;

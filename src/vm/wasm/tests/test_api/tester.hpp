@@ -90,28 +90,28 @@ public:
 
 class validating_tester : public base_tester {
 public:
-    CWasmContractTx ctrl;
+    CUniversalTx ctrl;
     transaction_trace trace;
 };
 
 
-template<uint64_t NAME>
+template<uint64_t NAME_V>
 struct test_api_action {
     static uint64_t get_account() {
-        return N(testapi);
+        return NAME(testapi);
     }
 
     static uint64_t get_name() {
-        return NAME;
+        return NAME_V;
     }
 };
 
 template<typename T>
-shared_ptr<transaction_trace> CallFunction( validating_tester &test, T ac, const vector<char> &data, const vector <uint64_t> &scope = {N(testapi)} ) {
+shared_ptr<transaction_trace> CallFunction( validating_tester &test, T ac, const vector<char> &data, const vector <uint64_t> &scope = {NAME(testapi)} ) {
     {
         //WASM_TRACE("%ld", data.size())
 
-        shared_ptr<transaction_trace> trx_trace = make_shared<transaction_trace>(transaction_trace{});
+        shared_ptr<transaction_trace> trx_trace = make_shared<transaction_trace>();
         inline_transaction trx;
         trx.contract = ac.get_account();
         trx.action   = ac.get_name();
@@ -119,14 +119,14 @@ shared_ptr<transaction_trace> CallFunction( validating_tester &test, T ac, const
 
         //std::cout << "CallFunction:" << wasm::name(trx.action).to_string() << std::endl;
 
-        for (auto a:scope) {
-            trx.authorization.push_back(permission{a, wasmio_owner});
+        for (auto a : scope) {
+            trx.authorization.emplace_back(a, wasmio_owner);
         }
 
         try {
             test.ctrl.ExecuteTx(*trx_trace, trx);
         } catch (wasm_chain::exception &e) {
-            WASM_TRACE("%s", e.to_detail_string())
+            //WASM_TRACE("%s", e.to_detail_string())
             //WASM_CHECK(false, e.detail())
             throw;
         }
@@ -159,10 +159,10 @@ constexpr uint64_t TEST_METHOD( const char *CLASS, const char *METHOD ) {
 
 struct dummy_action {
    static uint64_t get_name() {
-      return N(dummyaction);
+      return NAME(dummyaction);
    }
    static uint64_t get_account() {
-      return N(testapi);
+      return NAME(testapi);
    }
 
   char a; //1
@@ -202,4 +202,3 @@ inline datastream<Stream> &operator>>( datastream<Stream> &ds, dummy_action &t )
 
 #define CALL_TEST_FUNCTION( _TESTER, CLS, MTH, DATA ) CallFunction(_TESTER, test_api_action<TEST_METHOD(CLS, MTH)>{}, DATA)
 #define CALL_TEST_FUNCTION_ACTION( _TESTER, MTH, DATA ) CallFunction(_TESTER, test_api_action<MTH>{}, DATA)
-

@@ -27,7 +27,7 @@ vector<shared_ptr<CAppUserAccount>>& CLuaVMRunEnv::GetRawAppUserAccount() { retu
 
 CLuaVMRunEnv::~CLuaVMRunEnv() {}
 
-std::shared_ptr<string>  CLuaVMRunEnv::ExecuteContract(CLuaVMContext *pContextIn, uint64_t& uRunStep) {
+bool CLuaVMRunEnv::ExecuteContract(CLuaVMContext *pContextIn, uint64_t& fuel, string &errMsg) {
     p_context = pContextIn;
 
     assert(p_context->p_arguments->size() <= MAX_CONTRACT_ARGUMENT_SIZE);
@@ -35,41 +35,48 @@ std::shared_ptr<string>  CLuaVMRunEnv::ExecuteContract(CLuaVMContext *pContextIn
 
     pLua = std::make_shared<CLuaVM>(p_context->p_contract->code, *p_context->p_arguments);
 
-    LogPrint(BCLog::LUAVM, "CVmScriptRun::ExecuteContract(), prepare to execute tx. txid=%s, fuelLimit=%llu\n",
-             p_context->p_base_tx->GetHash().GetHex(), p_context->fuel_limit);
+    LogPrint(BCLog::LUAVM, "prepare to execute tx. txid=%s, fuelLimit=%llu\n",
+                            p_context->p_base_tx->GetHash().GetHex(), p_context->fuel_limit);
 
     tuple<uint64_t, string> ret = pLua.get()->Run(p_context->fuel_limit, this);
 
-    int64_t step = std::get<0>(ret);
-    if (0 == step) {
-        return make_shared<string>("VmScript run Failed");
-    } else if (-1 == step) {
-        return make_shared<string>(std::get<1>(ret));
+    int64_t fuelRet = std::get<0>(ret);
+    if (0 == fuelRet) {
+        errMsg = "VmScript run Failed";
+        return false;
+    } else if (-1 == fuelRet) {
+        errMsg = std::get<1>(ret);
+        return false;
     } else {
-        uRunStep = step;
+        fuel = fuelRet;
     }
 
-    LogPrint(BCLog::LUAVM, "txid:%s, step:%ld\n", p_context->p_base_tx->ToString(p_context->p_cw->accountCache), uRunStep);
+    LogPrint(BCLog::LUAVM, "{%s} used_fuel=%ld\n", p_context->p_base_tx->ToString(p_context->p_cw->accountCache), fuel);
 
     if (!CheckOperate()) {
-        return make_shared<string>("VmScript CheckOperate Failed");
+        errMsg = "VmScript CheckOperate Failed";
+        return false;
     }
 
     if (!OperateAccount(vmOperateOutput)) {
-        return make_shared<string>("VmScript OperateAccount Failed");
+        errMsg = "VmScript OperateAccount Failed";
+        return false;
     }
 
     LogPrint(BCLog::LUAVM, "isCheckAccount: %d\n", isCheckAccount);
+
     // CheckAppAcctOperate only support to check when the transfer symbol is WICC
     if (isCheckAccount && p_context->transfer_symbol == SYMB::WICC && !CheckAppAcctOperate()) {
-        return make_shared<string>("VmScript CheckAppAcct Failed");
+        errMsg = "VmScript CheckAppAcct Failed";
+        return false;
     }
 
     if (!OperateAppAccount(mapAppFundOperate)) {
-        return make_shared<string>("OperateAppAccount Failed");
+        errMsg = "OperateAppAccount Failed";
+        return false;
     }
 
-    return nullptr;
+    return true;
 }
 
 UnsignedCharArray CLuaVMRunEnv::GetAccountID(const CVmOperate& value) {
@@ -81,7 +88,7 @@ UnsignedCharArray CLuaVMRunEnv::GetAccountID(const CVmOperate& value) {
         CKeyID keyid = CKeyID(addr);
         CRegID regid;
         if (p_context->p_cw->accountCache.GetRegId(CUserID(keyid), regid)) {
-            accountId.assign(regid.GetRegIdRaw().begin(), regid.GetRegIdRaw().end());
+            accountId = regid.GetRegIdRaw();
         } else {
             accountId.assign(value.accountId, value.accountId + 34);
         }
@@ -131,8 +138,8 @@ bool CLuaVMRunEnv::CheckOperate() {
                 return false;
             CRegID regId(accountId);
             // allow to minus current contract's account only.
-            assert(!p_context->p_app_account->regid.IsEmpty());
-            if (regId != p_context->p_app_account->regid) {
+            assert(!p_context->sp_app_account->regid.IsEmpty());
+            if (regId != p_context->sp_app_account->regid) {
                 return false;
             }
 
@@ -207,7 +214,7 @@ bool CLuaVMRunEnv::CheckAppAcctOperate() {
     uint64_t sysContractAcct(0);
     for (auto item : vmOperateOutput) {
         UnsignedCharArray vAccountId = GetAccountID(item);
-        if (vAccountId == p_context->p_app_account->regid.GetRegIdRaw() &&
+        if (vAccountId == p_context->sp_app_account->regid.GetRegIdRaw() &&
             item.opType == BalanceOpType::SUB_FREE) {
             uint64_t value;
             memcpy(&value, item.money, sizeof(item.money));
@@ -252,54 +259,63 @@ bool CLuaVMRunEnv::CheckAppAcctOperate() {
 
 bool CLuaVMRunEnv::OperateAccount(const vector<CVmOperate>& operates) {
 
+    FeatureForkVersionEnum version = GetFeatureForkVersion(p_context->height);
     for (auto& operate : operates) {
         uint64_t value;
         memcpy(&value, operate.money, sizeof(operate.money));
 
-        auto pAccount = std::make_shared<CAccount>();
         UnsignedCharArray accountId = GetAccountID(operate);
         CUserID uid;
 
         if (accountId.size() == 6) {
-            CRegID regid;
-            regid.SetRegID(accountId);
-            if (!p_context->p_cw->accountCache.GetAccount(CUserID(regid), *pAccount)) {
-                LogPrint(BCLog::LUAVM, "[ERR]CLuaVMRunEnv::OperateAccount(), account not exist! regid=%s\n", regid.ToString());
+            uid = CRegID(accountId);
+        } else {
+            uid = CKeyID(string(accountId.begin(), accountId.end()));
+        }
+
+        shared_ptr<CAccount> spAccount = nullptr;
+        if (uid.IsEmpty()) {
+            if (version <= MAJOR_VER_R2 && accountId.size() != 6) {
+                LogPrint(BCLog::LUAVM, "[WARNING] the keyid of vm_operate is empty! "
+                        "accountId=%s, height=%u, txid=%s\n", HexStr(accountId),
+                        p_context->height, p_context->p_base_tx->GetHash().ToString());
+                // ignore the empty keyid and get an empty account to compatible for old data
+                // the empty account will not be saved,
+                // but the operate receipt will be saved
+                spAccount = make_shared<CAccount>();
+            } else {
+                LogPrint(BCLog::LUAVM, "[ERR] the uid is empty! accountId=%s\n", HexStr(accountId));
                 return false;
             }
-            uid = regid;
         } else {
-            CKeyID keyid;
-            keyid = CKeyID(string(accountId.begin(), accountId.end()));
-            if (!p_context->p_cw->accountCache.GetAccount(keyid, *pAccount)) {
-                pAccount = make_shared<CAccount>(keyid);
-                // TODO: new account fuel
+            spAccount = GetAccount(uid);
+            if (!spAccount) {
+                if (!uid.is<CKeyID>()) {
+                    LogPrint(BCLog::LUAVM, "[ERR]%s(), get to_account failed! to_uid=%s\n", __func__,
+                            uid.ToDebugString());
+                    return false;
+                }
+
+                // create new user
+                spAccount = p_context->p_base_tx->NewAccount(*p_context->p_cw, uid.get<CKeyID>());
+                LogPrint(BCLog::LUAVM, "%s(), create new user! to_uid=%s\n", __func__,
+                        uid.ToDebugString());
             }
-            uid = keyid;
         }
+
 
         LogPrint(BCLog::LUAVM, "uid=%s\nbefore account: %s\n", uid.ToString(),
-                 pAccount->ToString());
+                spAccount->ToString());
 
-        if (!pAccount->OperateBalance(SYMB::WICC, operate.opType, value)) {
-            LogPrint(BCLog::LUAVM, "[ERR]CLuaVMRunEnv::OperateAccount(), operate account failed! uid=%s, operate=%s\n",
-                uid.ToString(), GetBalanceOpTypeName(operate.opType));
+        ReceiptType code = (operate.opType == BalanceOpType::ADD_FREE) ? ReceiptType::CONTRACT_ACCOUNT_OPERATE_ADD :
+                            ReceiptType::CONTRACT_ACCOUNT_OPERATE_SUB;
+
+        if (!spAccount->OperateBalance(SYMB::WICC, operate.opType, value, code, receipts)) {
+            LogPrint(BCLog::LUAVM, "[ERR]%s(), operate account failed! uid=%s, operate=%s\n",
+                __func__, uid.ToDebugString(), GetBalanceOpTypeName(operate.opType));
             return false;
         }
-
-        if (operate.opType == BalanceOpType::ADD_FREE) {
-            receipts.emplace_back(nullId, uid, SYMB::WICC, value, ReceiptCode::CONTRACT_ACCOUNT_OPERATE_ADD);
-        } else if (operate.opType == BalanceOpType::SUB_FREE) {
-            receipts.emplace_back(uid, nullId, SYMB::WICC, value, ReceiptCode::CONTRACT_ACCOUNT_OPERATE_SUB);
-        }
-
-        if (!p_context->p_cw->accountCache.SetAccount(pAccount->keyid, *pAccount)) {
-            LogPrint(BCLog::LUAVM,
-                     "[ERR]CLuaVMRunEnv::OperateAccount(), save account failed, uid=%s\n", uid.ToString());
-            return false;
-        }
-
-        LogPrint(BCLog::LUAVM, "after account:%s\n", pAccount->ToString());
+        LogPrint(BCLog::LUAVM, "after account:%s\n", spAccount->ToString());
     }
 
     return true;
@@ -314,66 +330,32 @@ bool CLuaVMRunEnv::TransferAccountAsset(lua_State *L, const vector<AssetTransfer
     bool ret = true;
     for (auto& transfer : transfers) {
         bool isNewAccount = false;
-        CUserID fromUid;
-        if (transfer.isContractAccount) {
-            fromUid = GetContractRegID();
-        } else {
-            fromUid = GetTxUserRegid();
-        }
+        shared_ptr<CAccount> spFromAccount =
+            transfer.isContractAccount ? p_context->sp_app_account : p_context->sp_tx_account;
 
-        // TODO: need to cache the from account?
-        auto pFromAccount = make_shared<CAccount>();
-        if (!p_context->p_cw->accountCache.GetAccount(fromUid, *pFromAccount)) {
-            LogPrint(BCLog::LUAVM, "[ERR]CLuaVMRunEnv::TransferAccountAsset(), get from_account failed! from_uid=%s, "
-                     "isContractAccount=%d\n", transfer.toUid.ToString(), (int)transfer.isContractAccount);
-            ret = false; break;
-        }
-
-        auto pToAccount = make_shared<CAccount>();
-        if (!p_context->p_cw->accountCache.GetAccount(transfer.toUid, *pToAccount)) {
-            if (!transfer.toUid.is<CKeyID>()) {
-                LogPrint(BCLog::LUAVM, "[ERR]CLuaVMRunEnv::TransferAccountAsset(), get to_account failed! to_uid=%s\n",
-                    transfer.toUid.ToString());
-                ret = false; break;
+        auto &toUid = transfer.toUid;
+        shared_ptr<CAccount> spToAccount = GetAccount(toUid);
+        if (!spToAccount) {
+            if (!toUid.is<CKeyID>()) {
+                LogPrint(BCLog::LUAVM, "[ERR] get to_uid=%s's account failed! \n", transfer.toUid.ToDebugString());
+                ret = false;
+                break;
             }
             // create new user
-            pToAccount = make_shared<CAccount>(transfer.toUid.get<CKeyID>());
+            spToAccount = p_context->p_base_tx->NewAccount(*p_context->p_cw, toUid.get<CKeyID>());
             isNewAccount = true;
-            LogPrint(BCLog::LUAVM, "CLuaVMRunEnv::TransferAccountAsset(), create new user! to_uid=%s\n",
-                transfer.toUid.ToString());
+            LogPrint(BCLog::LUAVM, "create new user! to_uid=%s\n", transfer.toUid.ToDebugString());
         }
 
-        if (!pFromAccount->OperateBalance(transfer.tokenType, SUB_FREE, transfer.tokenAmount)) {
+        if (!spFromAccount->OperateBalance(transfer.tokenType, SUB_FREE, transfer.tokenAmount,
+                                        ReceiptType::CONTRACT_ACCOUNT_TRANSFER_ASSET, receipts, spToAccount.get())) {
             LogPrint(BCLog::LUAVM, "[ERR]CLuaVMRunEnv::TransferAccountAsset(), operate SUB_FREE in from_account failed! "
-                "from_uid=%s, isContractAccount=%d, symbol=%s, amount=%llu, account_amount=%llu\n",
-                fromUid.ToString(), (int)transfer.isContractAccount, transfer.tokenType,
-                transfer.tokenAmount, pFromAccount->GetBalance(transfer.tokenType, BalanceType::FREE_VALUE));
-            ret = false; break;
+                "from_regid=%s, isContractAccount=%d, symbol=%s, amount=%llu\n",
+                spFromAccount->regid.ToString(), (int)transfer.isContractAccount, transfer.tokenType,
+                transfer.tokenAmount);
+            ret = false;
+            break;
         }
-
-        if (!pToAccount->OperateBalance(transfer.tokenType, ADD_FREE, transfer.tokenAmount)) {
-            LogPrint(BCLog::LUAVM, "[ERR]CLuaVMRunEnv::TransferAccountAsset(), operate ADD_FREE in to_account failed! "
-                     "to_uid=%s, symbol=%s, amount=%llu\n",
-                     transfer.toUid.ToString(), transfer.tokenType, transfer.tokenAmount);
-            ret = false; break;
-        }
-
-        if (!p_context->p_cw->accountCache.SetAccount(pFromAccount->keyid, *pFromAccount)) {
-            LogPrint(BCLog::LUAVM,
-                     "[ERR]CLuaVMRunEnv::TransferAccountAsset(), save from_account failed, from_uid=%s, "
-                     "isContractAccount=%d\n",
-                     fromUid.ToString(), (int)transfer.isContractAccount);
-            ret = false; break;
-        }
-
-        if (!p_context->p_cw->accountCache.SetAccount(pToAccount->keyid, *pToAccount)) {
-            LogPrint(BCLog::LUAVM,
-                     "[ERR]CLuaVMRunEnv::TransferAccountAsset(), save to_account failed, to_uid=%s\n",
-                     transfer.toUid.ToString(), (int)transfer.isContractAccount);
-            ret = false; break;
-        }
-
-        receipts.emplace_back(fromUid, transfer.toUid, transfer.tokenType, transfer.tokenAmount, ReceiptCode::CONTRACT_ACCOUNT_TRANSFER_ASSET);
 
         if (isNewAccount) {
             LUA_BurnAccount(L, FUEL_ACCOUNT_NEW, BURN_VER_R2);
@@ -389,13 +371,13 @@ bool CLuaVMRunEnv::TransferAccountAsset(lua_State *L, const vector<AssetTransfer
 }
 
 const CRegID& CLuaVMRunEnv::GetContractRegID() {
-    assert(!p_context->p_app_account->regid.IsEmpty());
-    return p_context->p_app_account->regid;
+    assert(!p_context->sp_app_account->regid.IsEmpty());
+    return p_context->sp_app_account->regid;
 }
 
-const CRegID& CLuaVMRunEnv::GetTxUserRegid() {
-    assert(!p_context->p_tx_user_account->regid.IsEmpty());
-    return p_context->p_tx_user_account->regid;
+const CRegID& CLuaVMRunEnv::GetTxAccountRegId() {
+    assert(!p_context->sp_tx_account->regid.IsEmpty());
+    return p_context->sp_tx_account->regid;
 }
 
 uint64_t CLuaVMRunEnv::GetValue() const {
@@ -422,7 +404,18 @@ CCacheWrapper* CLuaVMRunEnv::GetCw() {
 
 CContractDBCache* CLuaVMRunEnv::GetScriptDB() { return &p_context->p_cw->contractCache; }
 
-CAccountDBCache* CLuaVMRunEnv::GetCatchView() { return &p_context->p_cw->accountCache; }
+CAccountDBCache* CLuaVMRunEnv::GetAccountCache() { return &p_context->p_cw->accountCache; }
+
+
+shared_ptr<CAccount> CLuaVMRunEnv::GetAccount(const CUserID &uid) {
+    if (p_context->sp_app_account->IsSelfUid(uid)) {
+        return p_context->sp_app_account;
+    } else if (p_context->sp_tx_account->IsSelfUid(uid)) {
+        return p_context->sp_tx_account;
+    } else {
+        return p_context->p_base_tx->GetAccount(*p_context->p_cw, uid);
+    }
+}
 
 void CLuaVMRunEnv::InsertOutAPPOperte(const vector<uint8_t>& userId,
                                    const CAppFundOperate& source) {

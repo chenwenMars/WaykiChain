@@ -8,64 +8,31 @@
 
 #include "config/configuration.h"
 #include "main.h"
+#include "persistence/assetdb.h"
 
 bool CCoinStakeTx::CheckTx(CTxExecuteContext &context) {
-    CCacheWrapper &cw = *context.pCw; CValidationState &state = *context.pState;
-    IMPLEMENT_DISABLE_TX_PRE_STABLE_COIN_RELEASE;
-    IMPLEMENT_CHECK_TX_REGID_OR_PUBKEY(txUid);
-    if (!CheckFee(context)) return false;
+    IMPLEMENT_DEFINE_CW_STATE;
 
-    if (stake_type != BalanceOpType::STAKE && stake_type != BalanceOpType::UNSTAKE) {
+    if (stake_type != BalanceOpType::STAKE && stake_type != BalanceOpType::UNSTAKE)
         return state.DoS(100, ERRORMSG("CCoinStakeTx::CheckTx, invalid stakeType"), REJECT_INVALID, "bad-stake-type");
-    }
 
-    // TODO: use issued asset registry in future to replace below hard-coding
-    if (coin_symbol != SYMB::WICC && coin_symbol != SYMB::WUSD && coin_symbol != SYMB::WGRT) {
-        return state.DoS(100, ERRORMSG("CCoinStakeTx::CheckTx, invalid coin_symbol"), REJECT_INVALID,
+    if (!cw.assetCache.CheckAsset(coin_symbol))
+        return state.DoS(100, ERRORMSG("CCoinStakeTx::CheckTx, invalid %s", coin_symbol), REJECT_INVALID,
                          "bad-coin-symbol");
-    }
 
-    if (coin_amount == 0 || !CheckCoinRange(coin_symbol, coin_amount)) {
+    if (coin_amount == 0 || !CheckCoinRange(coin_symbol, coin_amount))
         return state.DoS(100, ERRORMSG("CCoinStakeTx::CheckTx, coinsToStake out of range"), REJECT_INVALID,
                          "bad-tx-coins-outofrange");
-    }
-
-    CAccount account;
-    if (!cw.accountCache.GetAccount(txUid, account)) {
-        return state.DoS(100, ERRORMSG("CCoinStakeTx::CheckTx, read txUid %s account info error", txUid.ToString()),
-                         READ_ACCOUNT_FAIL, "bad-read-accountdb");
-    }
-
-    CPubKey pubKey = (txUid.is<CPubKey>() ? txUid.get<CPubKey>() : account.owner_pubkey);
-    IMPLEMENT_CHECK_TX_SIGNATURE(pubKey);
 
     return true;
 }
 
 bool CCoinStakeTx::ExecuteTx(CTxExecuteContext &context) {
-    CCacheWrapper &cw = *context.pCw; CValidationState &state = *context.pState;
-    CAccount account;
-    if (!cw.accountCache.GetAccount(txUid, account))
-        return state.DoS(100, ERRORMSG("CCoinStakeTx::ExecuteTx, read txUid %s account info error",
-                        txUid.ToString()), UCOIN_STAKE_FAIL, "bad-read-accountdb");
+    CValidationState &state = *context.pState;
 
-    if (!GenerateRegID(context, account)) {
-        return false;
-    }
-
-    if (!account.OperateBalance(fee_symbol, BalanceOpType::SUB_FREE, llFees)) {
-        return state.DoS(100, ERRORMSG("CCoinStakeTx::ExecuteTx, insufficient coins in txUid %s account",
-                        txUid.ToString()), UPDATE_ACCOUNT_FAIL, "insufficient-coins");
-    }
-
-    if (!account.OperateBalance(coin_symbol, stake_type, coin_amount)) {
+    if (!sp_tx_account->OperateBalance(coin_symbol, stake_type, coin_amount, ReceiptType::COIN_STAKE, receipts))
         return state.DoS(100, ERRORMSG("CCoinStakeTx::ExecuteTx, insufficient coins to stake in txUid(%s)",
                         txUid.ToString()), UPDATE_ACCOUNT_FAIL, "insufficient-coin-amount");
-    }
-
-    if (!cw.accountCache.SaveAccount(account))
-        return state.DoS(100, ERRORMSG("CCoinStakeTx::ExecuteTx, write source addr %s account info error",
-                        txUid.ToString()), UPDATE_ACCOUNT_FAIL, "bad-read-accountdb");
 
     return true;
 }
@@ -78,8 +45,8 @@ string CCoinStakeTx::ToString(CAccountDBCache &accountCache) {
         coin_amount, fee_symbol, llFees, valid_height);
 }
 
-Object CCoinStakeTx::ToJson(const CAccountDBCache &accountCache) const {
-    Object result = CBaseTx::ToJson(accountCache);
+Object CCoinStakeTx::ToJson(CCacheWrapper &cw) const {
+    Object result = CBaseTx::ToJson(cw);
     result.push_back(Pair("stake_type",     GetBalanceOpTypeName(stake_type)));
     result.push_back(Pair("coin_symbol",    coin_symbol));
     result.push_back(Pair("coin_amount",    coin_amount));

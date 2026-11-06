@@ -10,6 +10,7 @@
 #include "config/scoin.h"
 #include "asset.h"
 #include "id.h"
+#include "commons/util/enumhelper.hpp"
 
 #include "commons/json/json_spirit_utils.h"
 #include "commons/json/json_spirit_value.h"
@@ -18,6 +19,40 @@
 
 using namespace std;
 using namespace json_spirit;
+
+enum class CdpBcoinStatus: uint8_t {
+    NONE = 0,
+    STAKE_ON,
+    STAKE_OFF,
+};
+
+static const EnumHelper<CdpBcoinStatus, uint8_t> kCdpBcoinStatusHelper = {{
+    {CdpBcoinStatus::NONE, "NONE"},
+    {CdpBcoinStatus::STAKE_ON, "STAKE_ON"},
+    {CdpBcoinStatus::STAKE_OFF, "STAKE_OFF"}
+}};
+
+class CCdpBcoinDetail {
+public:
+    CdpBcoinStatus status = CdpBcoinStatus::NONE;
+    CTxCord init_tx_cord; // the tx_cord of first init tx
+
+    IMPLEMENT_SERIALIZE(
+        READWRITE_ENUM(status, uint8_t);
+        READWRITE(init_tx_cord);
+    )
+
+    string ToString() const {
+        return strprintf("status=%s, init_tx_cord=%s", kCdpBcoinStatusHelper.GetName(status), init_tx_cord.ToString());
+    }
+
+    bool IsEmpty() const { return status == CdpBcoinStatus::NONE; }
+
+    void SetEmpty() {
+        status = CdpBcoinStatus::NONE;
+        init_tx_cord.SetEmpty();
+    }
+};
 
 /**
  * CDP Cache Item: stake in BaseCoin to get StableCoins
@@ -31,15 +66,15 @@ using namespace json_spirit;
 struct CUserCDP {
     uint256 cdpid;                      // CDP TxID
     CRegID owner_regid;                 // CDP Owner RegId
-    int32_t block_height;               // persisted: Hj (Hj+1 refer to current height) - last op block height
+    int32_t block_height = 0;           // persisted: Hj (Hj+1 refer to current height) - last op block height
     TokenSymbol bcoin_symbol;           // persisted
     TokenSymbol scoin_symbol;           // persisted
-    uint64_t total_staked_bcoins;       // persisted: total staked bcoins
-    uint64_t total_owed_scoins;         // persisted: TNj = last + minted = total minted - total redempted
+    uint64_t total_staked_bcoins = 0;   // persisted: total staked bcoins
+    uint64_t total_owed_scoins = 0;     // persisted: TNj = last + minted = total minted - total redempted
 
-    mutable double collateral_ratio_base; // ratioBase = total_staked_bcoins / total_owed_scoins, mem-only
+    mutable double collateral_ratio_base = 0; // ratioBase = total_staked_bcoins / total_owed_scoins, mem-only
 
-    CUserCDP() : block_height(0), total_staked_bcoins(0), total_owed_scoins(0), collateral_ratio_base(0) {}
+    CUserCDP() {}
 
     CUserCDP(const CRegID &regId, const uint256 &cdpidIn, int32_t blockHeight,
              TokenSymbol bcoinSymbol, TokenSymbol scoinSymbol, uint64_t totalStakedBcoins,
@@ -51,7 +86,7 @@ struct CUserCDP {
           scoin_symbol(scoinSymbol),
           total_staked_bcoins(totalStakedBcoins),
           total_owed_scoins(totalOwedScoins) {
-              ComputeCollateralRatioBase();
+              ComputeCollateralRatioBase(); // will init collateral_ratio_base
           }
 
     // Attention: NEVER use block_height as a comparative factor, as block_height may not change, i.e. liquidating
@@ -114,7 +149,7 @@ struct CUserCDP {
 
     void AddStake(int32_t blockHeight, uint64_t bcoinsToStake, uint64_t mintedScoins);
 
-    void LiquidatePartial(int32_t blockHeight, uint64_t bcoinsToLiquidate, uint64_t scoinsToLiquidate);
+    void PartialLiquidate(int32_t blockHeight, uint64_t bcoinsToLiquidate, uint64_t scoinsToLiquidate);
 
     bool IsFinished() const { return total_owed_scoins == 0 && total_staked_bcoins == 0; }
 
@@ -137,8 +172,8 @@ struct CUserCDP {
 
 class CCdpGlobalData {
 public:
-    uint64_t total_staked_assets;
-    uint64_t total_owed_scoins;
+    uint64_t total_staked_assets = 0;
+    uint64_t total_owed_scoins = 0;
 
     IMPLEMENT_SERIALIZE(
         READWRITE(VARINT(total_staked_assets));
@@ -152,6 +187,12 @@ public:
     void SetEmpty() {
         total_staked_assets = 0;
         total_owed_scoins = 0;
+    }
+
+    string ToString() const {
+        return strprintf("total_staked_assets=%llu", total_staked_assets) + ", " +
+        strprintf("total_owed_scoins=%llu", total_owed_scoins);
+
     }
 
     uint64_t GetCollateralRatio(const uint64_t assetPrice) const {

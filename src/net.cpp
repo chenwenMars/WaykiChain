@@ -59,13 +59,13 @@ bool OpenNetworkConnection(const CAddress& addrConnect, CSemaphoreGrant* grantOu
 // Global state variables
 //
 bool fDiscover          = true;
-extern uint64_t nLocalServices ;
+extern uint64_t nLocalServices;
 CCriticalSection cs_mapLocalHost;
 map<CNetAddr, LocalServiceInfo> mapLocalHost;
 static bool vfReachable[NET_MAX] = {};
 static bool vfLimited[NET_MAX]   = {};
 static CNode* pnodeLocalHost     = nullptr;
-extern CNode* pnodeSync  ;
+extern CNode* pnodeSync;
 
 static vector<SOCKET> vhListenSocket;
 CAddrMan addrman;
@@ -295,12 +295,12 @@ bool GetMyPublicIP(CNetAddr& ipRet) {
     if (ipHost.find("/") != std::string::npos) {
         string host = ipHost;
         ipHost = "";
-        return ERRORMSG("GetMyPublicIP() : ipserver (%s) contains /", host);
+        return ERRORMSG("ipserver (%s) contains /", host);
     }
 
     CService addrConnect(ipHost, 80, true);
     if (!addrConnect.IsValid())
-        return ERRORMSG("GetMyPublicIP() : service is unavalable: %s\n", ipHost);
+        return ERRORMSG("service is unavalable: %s\n", ipHost);
 
     stringstream stream;
     stream << "GET" << " " << "/ip" << " " << "HTTP/1.1\r\n";
@@ -311,7 +311,7 @@ bool GetMyPublicIP(CNetAddr& ipRet) {
 
     SOCKET hSocket;
     if (!ConnectSocket(addrConnect, hSocket))
-        return ERRORMSG("GetMyPublicIP() : failed to connect IP server: %s", addrConnect.ToString());
+        return ERRORMSG("failed to connect IP server: %s", addrConnect.ToString());
 
     send(hSocket, request.c_str(), request.length(), MSG_NOSIGNAL);
 
@@ -321,12 +321,12 @@ bool GetMyPublicIP(CNetAddr& ipRet) {
     closesocket(hSocket);
 
     if (strlen(buffer) == 0)
-        return ERRORMSG("GetMyPublicIP() : failed to receive data from server: %s", addrConnect.ToString());
+        return ERRORMSG("failed to receive data from server: %s", addrConnect.ToString());
 
     static const char* const key = "\"ipAddress\":\"";
     char* from                   = strstr(buffer, key);
     if (from == nullptr) {
-        return ERRORMSG("GetMyPublicIP() : invalid message");
+        return ERRORMSG("invalid message");
     }
     from += strlen(key);
     char* to   = strstr(from, "\"");
@@ -334,11 +334,11 @@ bool GetMyPublicIP(CNetAddr& ipRet) {
     publicIp = ip;
     CService ipAddr(publicIp, 0, true);
     if (!ipAddr.IsValid() /* || !ipAddr.IsRoutable() */)
-        return ERRORMSG("GetMyPublicIP() : invalid external ip address: %s", publicIp);
+        return ERRORMSG("invalid public IP: %s", publicIp);
 
     ipRet.SetIP(ipAddr);
 
-    LogPrint(BCLog::INFO, "GetMyPublicIP() : My External IP is: %s\n", publicIp);
+    LogPrint(BCLog::INFO, "My Public IP is: %s\n", publicIp);
 
     return true;
 }
@@ -352,13 +352,13 @@ void ThreadGetMyPublicIP() {
 
 bool PostNodeInfo() {
      if (ipHost == "")
-        return ERRORMSG("PostNodeInfo() : ipserver uninitialized");
+        return ERRORMSG("ipserver uninitialized");
 
     string content  = GetSystemInfo();
 
     CService addrConnect(ipHost, 80, true);
     if (!addrConnect.IsValid())
-        return ERRORMSG("PostNodeInfo() : service is unavalable: %s\n", ipHost);
+        return ERRORMSG("service is unavalable: %s\n", ipHost);
 
     stringstream stream;
     stream << "POST" << " " << "/info" << " " << "HTTP/1.1\r\n";
@@ -371,7 +371,7 @@ bool PostNodeInfo() {
 
     SOCKET hSocket;
     if (!ConnectSocket(addrConnect, hSocket))
-        return ERRORMSG("PostNodeInfo() : failed to connect to server: %s", addrConnect.ToString());
+        return ERRORMSG("failed to connect to server: %s", addrConnect.ToString());
 
     send(hSocket, request.c_str(), request.length(), MSG_NOSIGNAL);
     closesocket(hSocket);
@@ -396,7 +396,6 @@ void ThreadPostNodeInfo() {
 }
 
 void AddressCurrentlyConnected(const CService& addr) { addrman.Connected(addr); }
-
 
 
 CNode* FindNode(const CNetAddr& ip) {
@@ -1535,20 +1534,20 @@ bool CAddrDB::Write(const CAddrMan& addr) {
     FILE* file                      = fopen(pathTmp.string().c_str(), "wb");
     CAutoFile fileout               = CAutoFile(file, SER_DISK, CLIENT_VERSION);
     if (!fileout)
-        return ERRORMSG("%s : Failed to open file %s", __func__, pathTmp.string());
+        return ERRORMSG("Failed to open file %s", pathTmp.string());
 
     // Write and commit header, data
     try {
         fileout << ssPeers;
     } catch (std::exception& e) {
-        return ERRORMSG("%s : Serialize or I/O error - %s", __func__, e.what());
+        return ERRORMSG("Serialize or I/O error - %s", e.what());
     }
     FileCommit(fileout);
     fileout.fclose();
 
     // replace existing peers.dat, if any, with new peers.dat.XXXX
     if (!RenameOver(pathTmp, pathAddr))
-        return ERRORMSG("%s : Rename-into-place failed", __func__);
+        return ERRORMSG("Rename-into-path failed");
 
     return true;
 }
@@ -1558,7 +1557,7 @@ bool CAddrDB::Read(CAddrMan& addr) {
     FILE* file       = fopen(pathAddr.string().c_str(), "rb");
     CAutoFile filein = CAutoFile(file, SER_DISK, CLIENT_VERSION);
     if (!filein)
-        return ERRORMSG("%s : Failed to open file %s", __func__, pathAddr.string());
+        return ERRORMSG("Failed to open file %s", pathAddr.string());
 
     // use file size to size memory buffer
     int32_t fileSize = boost::filesystem::file_size(pathAddr);
@@ -1575,7 +1574,7 @@ bool CAddrDB::Read(CAddrMan& addr) {
         filein.read((char*)&vchData[0], dataSize);
         filein >> hashIn;
     } catch (std::exception& e) {
-        return ERRORMSG("%s : Deserialize or I/O error - %s", __func__, e.what());
+        return ERRORMSG("Deserialize or I/O error - %s", e.what());
     }
     filein.fclose();
 
@@ -1584,7 +1583,7 @@ bool CAddrDB::Read(CAddrMan& addr) {
     // verify stored checksum matches input data
     uint256 hashTmp = Hash(ssPeers.begin(), ssPeers.end());
     if (hashIn != hashTmp)
-        return ERRORMSG("%s : Checksum mismatch, data corrupted", __func__);
+        return ERRORMSG("Checksum mismatch, data corrupted");
 
     uint8_t pchMsgTmp[4];
     try {
@@ -1593,12 +1592,12 @@ bool CAddrDB::Read(CAddrMan& addr) {
 
         // ... verify the network matches ours
         if (memcmp(pchMsgTmp, SysCfg().MessageStart(), sizeof(pchMsgTmp)))
-            return ERRORMSG("%s : Invalid network magic number", __func__);
+            return ERRORMSG("Invalid network magic number");
 
         // de-serialize address data into one CAddrMan object
         ssPeers >> addr;
     } catch (std::exception& e) {
-        return ERRORMSG("%s : Deserialize or I/O error - %s", __func__, e.what());
+        return ERRORMSG("Deserialize or I/O error - %s", e.what());
     }
 
     return true;

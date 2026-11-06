@@ -30,7 +30,7 @@ DIST_SUBDIRS = crypto/secp256k1
 LIBSECP256K1 = crypto/secp256k1/libsecp256k1.la
 AM_CPPFLAGS += -I$(srcdir)/crypto/secp256k1/include -I$(srcdir)/crypto/secp256k1/contrib
 
-$(LIBSECP256K1): $(wildcard secp256k1/src/*.h) $(wildcard secp256k1/src/*.c) $(wildcard secp256k1/include/*)
+$(LIBSECP256K1): $(wildcard crypto/secp256k1/src/*.h) $(wildcard crypto/secp256k1/src/*.c) $(wildcard crypto/secp256k1/include/*)
 	$(AM_V_at)$(MAKE) $(AM_MAKEFLAGS) -C $(@D) $(@F)
 
 
@@ -102,6 +102,7 @@ coin_CORE_H = \
   commons/openssl.hpp \
   commons/serialize.h \
   commons/leb128.h \
+  commons/lrucache.hpp \
   commons/types.h \
   commons/util/enumhelper.hpp \
   commons/util/util.h \
@@ -134,11 +135,13 @@ coin_CORE_H = \
   miner/miner.h \
   miner/pbftcontext.h \
   miner/pbftmanager.h \
+  miner/pbftlimitmap.h \
   mruset.h \
   netbase.h \
   net.h \
   nodeinfo.h \
   persistence/assetdb.h \
+  persistence/axcdb.h \
   persistence/leveldbwrapper.h \
   persistence/accountdb.h \
   persistence/block.h \
@@ -175,16 +178,15 @@ coin_CORE_H = \
   rpc/rpcnet.h \
   rpc/rpcvm.h \
   rpc/rpcwallet.h \
-  rpc/rpcgenrawtx.h \
   commons/support/cleanse.h \
   sigcache.h \
   tx/assettx.h \
   tx/accountregtx.h \
-  tx/nickidregtx.h \
+  tx/accountpermscleartx.h \
   tx/blockrewardtx.h \
   tx/blockpricemediantx.h \
   tx/cdptx.h \
-  tx/coinrewardtx.h \
+  tx/coinminttx.h \
   tx/contracttx.h \
   tx/cointransfertx.h \
   tx/coinutxotx.h \
@@ -192,14 +194,12 @@ coin_CORE_H = \
   tx/dextx.h \
   tx/dexoperatortx.h \
   tx/coinstaketx.h \
-  tx/merkletx.h \
-  tx/mulsigtx.h \
   tx/pricefeedtx.h \
   tx/tx.h \
-  tx/einvalidtxtype.h \
   tx/txmempool.h \
   tx/txserializer.h \
   tx/proposaltx.h \
+  tx/universaltx.h \
   sync.h \
   threadsafety.h \
   tinyformat.h \
@@ -310,16 +310,22 @@ WASM_H = \
   vm/wasm/wasm_context_interface.hpp \
   vm/wasm/wasm_host_methods.hpp \
   vm/wasm/wasm_interface.hpp \
-  vm/wasm/wasm_native_contract.hpp \
   vm/wasm/wasm_trace.hpp \
-  vm/wasm/wasm_rpc_message.hpp
+  vm/wasm/wasm_rpc_message.hpp \
+  vm/wasm/wasm_context_rpc.hpp \
+  vm/wasm/wasm_control_rpc.hpp \
+  vm/wasm/modules/wasm_native_dispatch.hpp \
+  vm/wasm/modules/wasm_native_bank_module.hpp \
+  vm/wasm/modules/wasm_native_voting_module.hpp \
+  vm/wasm/modules/wasm_native_module.hpp
 
 
 WASM_CPP = \
   vm/wasm/abi_serializer.cpp \
   vm/wasm/wasm_context.cpp \
-  vm/wasm/wasm_native_contract.cpp \
   vm/wasm/abi_serializer.cpp \
+  vm/wasm/wasm_context_rpc.cpp \
+  vm/wasm/wasm_control_rpc.cpp \
   vm/wasm/exception/exception.cpp \
   vm/wasm/exception/log_message.cpp
 
@@ -352,6 +358,7 @@ libcoin_server_a_SOURCES = \
   p2p/addrman.cpp \
   p2p/protocol.cpp \
   p2p/node.cpp \
+  p2p/chainmessage.cpp \
   p2p/netmessage.cpp \
   rpc/core/httpserver.cpp \
   rpc/core/rpcclient.cpp \
@@ -366,19 +373,20 @@ libcoin_server_a_SOURCES = \
   rpc/rpcnet.cpp \
   rpc/rpcscoin.cpp \
   rpc/rpctx.cpp \
+  rpc/rpcutxo.cpp \
   rpc/rpcvm.cpp \
   rpc/rpcwallet.cpp \
-  rpc/rpcgenrawtx.cpp \
-  rpc/rpcwasm.cpp \
+  rpc/rpcsubmittx.cpp \
   rpc/rpcproposal.cpp \
+  rpc/rpctxserializer.cpp \
   sigcache.cpp \
   tx/assettx.cpp \
   tx/accountregtx.cpp \
-  tx/nickidregtx.cpp \
+  tx/accountpermscleartx.cpp \
   tx/blockrewardtx.cpp \
   tx/blockpricemediantx.cpp \
   tx/cdptx.cpp \
-  tx/coinrewardtx.cpp \
+  tx/coinminttx.cpp \
   tx/contracttx.cpp \
   tx/cointransfertx.cpp \
   tx/coinutxotx.cpp \
@@ -386,12 +394,11 @@ libcoin_server_a_SOURCES = \
   tx/dextx.cpp \
   tx/dexoperatortx.cpp \
   tx/coinstaketx.cpp \
-  tx/mulsigtx.cpp \
   tx/proposaltx.cpp \
   tx/pricefeedtx.cpp \
   tx/tx.cpp \
   tx/txmempool.cpp \
-  tx/wasmcontracttx.cpp \
+  tx/universaltx.cpp \
   logging.cpp \
   $(VMLUA_H) \
   $(VM_CPP) \
@@ -453,7 +460,7 @@ libcoin_common_a_SOURCES = \
   commons/json/json_spirit_value.cpp \
   commons/json/json_spirit_writer.cpp \
   sync.cpp \
-  tx/coinrewardtx.cpp \
+  tx/coinminttx.cpp \
   $(COIN_CORE_H)
 
 if GLIBC_BACK_COMPAT
@@ -525,6 +532,6 @@ DISTCLEANFILES = config/build.h
 EXTRA_DIST = leveldb Makefile.include
 
 clean-local:
-	-$(MAKE) -C secp256k1 clean
-	-$(MAKE) -C leveldb clean
+	-$(MAKE) -C crypto/secp256k1 clean
+	-$(MAKE) -C persistence/leveldb clean
 	rm -f persistence/leveldb/*/*.gcno persistence/leveldb/helpers/memenv/*.gcno

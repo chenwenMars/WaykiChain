@@ -49,10 +49,11 @@ EOSIO_VM_H = \
   vm/wasm/types/inline_transaction.hpp \
   vm/wasm/types/check.hpp \
   vm/wasm/types/name.hpp \
+  vm/wasm/types/hash256.hpp \
   vm/wasm/types/symbol.hpp \
   vm/wasm/types/types.hpp \
   vm/wasm/types/uint128.hpp \
-  vm/wasm/types/varint.hpp 
+  vm/wasm/types/varint.hpp
 
 
 WASM_INTERFACE = vm/wasm/wasm_interface.cpp
@@ -102,5 +103,6 @@ libwasm_a_SOURCES = \
   $(WASM_INTERFACE) \
   $(WASM_RUNTIME) \
   $(UINT128_SRC) \
+  vm/wasm/types/time.cpp \
   $(COMPILER_BUILTINS_H) \
   $(EOSIO_VM_H)

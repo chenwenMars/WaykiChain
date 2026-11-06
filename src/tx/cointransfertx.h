@@ -45,7 +45,7 @@ public:
 
     virtual std::shared_ptr<CBaseTx> GetNewInstance() const { return std::make_shared<CBaseCoinTransferTx>(*this); }
     virtual string ToString(CAccountDBCache &accountCache);
-    virtual Object ToJson(const CAccountDBCache &accountCache) const;
+    virtual Object ToJson(CCacheWrapper &cw) const;
 
     virtual bool CheckTx(CTxExecuteContext &context);
     virtual bool ExecuteTx(CTxExecuteContext &context);
@@ -69,9 +69,14 @@ public:
                     const TokenSymbol &feeSymbol, const uint64_t feesIn, const string &memoIn)
         : CBaseTx(UCOIN_TRANSFER_TX, txUidIn, validHeightIn, feeSymbol, feesIn),
           transfers( { {toUidIn, coinSymbol, coinAmount} } ),
-          memo(memoIn) {}
+          memo(memoIn) {};
 
-    ~CCoinTransferTx() {}
+    CCoinTransferTx(const CUserID &txUidIn, vector<SingleTransfer> transfersIn, const int32_t validHeightIn,
+                    const TokenSymbol &feeSymbol, const uint64_t feesIn, const string &memoIn)
+        : CBaseTx(UCOIN_TRANSFER_TX, txUidIn, validHeightIn, feeSymbol, feesIn), transfers(transfersIn),
+          memo(memoIn) {};
+
+    ~CCoinTransferTx() {};
 
     IMPLEMENT_SERIALIZE(
         READWRITE(VARINT(this->nVersion));
@@ -92,10 +97,11 @@ public:
 
     virtual std::shared_ptr<CBaseTx> GetNewInstance() const { return std::make_shared<CCoinTransferTx>(*this); }
     virtual string ToString(CAccountDBCache &accountCache);
-    virtual Object ToJson(const CAccountDBCache &accountCache) const;
+    virtual Object ToJson(CCacheWrapper &cw) const;
 
     virtual bool CheckTx(CTxExecuteContext &context);
     virtual bool ExecuteTx(CTxExecuteContext &context);
+    virtual bool CheckMinFee(CTxExecuteContext &context, uint64_t minFee);
 };
 
 #endif // TX_COIN_TRANSFER_H

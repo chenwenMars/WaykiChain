@@ -11,100 +11,171 @@
 #include "main.h"
 
 
- uint64_t CAccount::GetBalance(const TokenSymbol &tokenSymbol, const BalanceType balanceType) {
-     uint64_t ret = 0;
-     if (GetBalance(tokenSymbol, balanceType, ret)) return ret;
-     return 0;
- }
-
 bool CAccount::GetBalance(const TokenSymbol &tokenSymbol, const BalanceType balanceType, uint64_t &value) {
-    auto iter = tokens.find(tokenSymbol);
-    if (iter != tokens.end()) {
-        auto accountToken = iter->second;
-        switch (balanceType) {
-            case FREE_VALUE:    value = accountToken.free_amount;   return true;
-            case STAKED_VALUE:  value = accountToken.staked_amount; return true;
-            case FROZEN_VALUE:  value = accountToken.frozen_amount; return true;
-            case VOTED_VALUE:   value = accountToken.voted_amount;  return true;
-            default: return false;
-        }
+    const auto iter = tokens.find(tokenSymbol);
+    if (iter == tokens.end())
+        return false; // token not found
+
+    const auto &accountToken = iter->second;
+
+    switch (balanceType) {
+        case FREE_VALUE:    value = accountToken.free_amount;    break;
+        case STAKED_VALUE:  value = accountToken.staked_amount;  break;
+        case FROZEN_VALUE:  value = accountToken.frozen_amount;  break;
+        case VOTED_VALUE:   value = accountToken.voted_amount;   break;
+        case PLEDGED_VALUE: value = accountToken.pledged_amount; break;
+        default: return false;
     }
 
-    return false;
+    return true;
 }
 
-bool CAccount::OperateBalance(const TokenSymbol &tokenSymbol, const BalanceOpType opType, const uint64_t &value) {
+bool CAccount::OperateBalance(const TokenSymbol &tokenSymbol, const BalanceOpType opType, const uint64_t &value,
+                            ReceiptType receiptType, ReceiptList &receipts, CAccount *pOtherAccount) {
 
     CAccountToken &accountToken = tokens[tokenSymbol];
+    CUserID fromUid = CUserID(keyid);
+    CUserID toUid = CNullID();
+
+    CReceipt receipt(receiptType, opType);
+
+    if (pOtherAccount != nullptr && this != pOtherAccount && this->keyid == pOtherAccount->keyid) {
+        return ERRORMSG("account this != pOtherAccount, but the keyid is same, addr=%s",
+                    this->keyid.ToAddress());
+    }
+
     switch (opType) {
         case ADD_FREE: {
             accountToken.free_amount += value;
-            return true;
+
+            if (pOtherAccount != nullptr) {
+                CAccountToken peerToken = pOtherAccount->GetToken(tokenSymbol);
+                if (peerToken.free_amount < value)
+                    return ERRORMSG("peer token free_amount insufficient(%llu vs %llu) of %s",
+                                peerToken.free_amount, value, tokenSymbol);
+
+                peerToken.free_amount -= value;
+                pOtherAccount->SetToken(tokenSymbol, peerToken);
+                toUid = CUserID(pOtherAccount->keyid);
+            } else {
+                toUid = fromUid;
+                fromUid = CNullID();
+            }
+
+            break;
         }
         case SUB_FREE: {
             if (accountToken.free_amount < value)
-                return ERRORMSG("CAccount::OperateBalance, free_amount insufficient(%llu vs %llu) of %s",
+                return ERRORMSG("free_amount insufficient(%llu vs %llu) of %s",
                                 accountToken.free_amount, value, tokenSymbol);
 
             accountToken.free_amount -= value;
-            return true;
+
+            if (pOtherAccount != nullptr) {
+                CAccountToken peerToken = pOtherAccount->GetToken(tokenSymbol);
+
+                peerToken.free_amount += value;
+                pOtherAccount->SetToken(tokenSymbol, peerToken);
+                toUid = CUserID(pOtherAccount->keyid);
+            }
+
+            break;
         }
         case STAKE: {
             if (accountToken.free_amount < value)
-                return ERRORMSG("CAccount::OperateBalance, free_amount insufficient(%llu vs %llu) of %s",
+                return ERRORMSG("free_amount insufficient(%llu vs %llu) of %s",
                                 accountToken.free_amount, value, tokenSymbol);
 
             accountToken.free_amount -= value;
             accountToken.staked_amount += value;
-            return true;
+            break;
         }
         case UNSTAKE: {
             if (accountToken.staked_amount < value)
-                return ERRORMSG("CAccount::OperateBalance, staked_amount insufficient(%llu vs %llu) of %s",
+                return ERRORMSG("staked_amount insufficient(%llu vs %llu) of %s",
                                 accountToken.staked_amount, value, tokenSymbol);
 
             accountToken.free_amount += value;
             accountToken.staked_amount -= value;
-            return true;
+            break;
         }
         case FREEZE: {
             if (accountToken.free_amount < value)
-                return ERRORMSG("CAccount::OperateBalance, free_amount insufficient(%llu vs %llu) of %s",
+                return ERRORMSG("free_amount insufficient(%llu vs %llu) of %s",
                                 accountToken.free_amount, value, tokenSymbol);
 
             accountToken.free_amount -= value;
             accountToken.frozen_amount += value;
-            return true;
+            break;
         }
         case UNFREEZE: {
             if (accountToken.frozen_amount < value)
-                return ERRORMSG("CAccount::OperateBalance, frozen_amount insufficient(%llu vs %llu) of %s",
+                return ERRORMSG("frozen_amount insufficient(%llu vs %llu) of %s",
                                 accountToken.frozen_amount, value, tokenSymbol);
 
             accountToken.free_amount += value;
             accountToken.frozen_amount -= value;
-            return true;
+            break;
         }
         case VOTE: {
             if (accountToken.free_amount < value)
-                return ERRORMSG("CAccount::OperateBalance, free_amount insufficient(%llu vs %llu) of %s",
+                return ERRORMSG("free_amount insufficient(%llu vs %llu) of %s",
                                 accountToken.free_amount, value, tokenSymbol);
 
             accountToken.free_amount -= value;
             accountToken.voted_amount += value;
-            return true;
+            break;
         }
         case UNVOTE: {
             if (accountToken.voted_amount < value)
-                return ERRORMSG("CAccount::OperateBalance, voted_amount insufficient(%llu vs %llu) of %s",
+                return ERRORMSG("voted_amount insufficient(%llu vs %llu) of %s",
                                 accountToken.voted_amount, value, tokenSymbol);
 
             accountToken.free_amount += value;
             accountToken.voted_amount -= value;
-            return true;
+            break;
+        }
+        case PLEDGE: {
+            if (accountToken.free_amount < value)
+                return ERRORMSG("free_amount insufficient(%llu vs %llu) of %s",
+                                accountToken.free_amount, value, tokenSymbol);
+
+            accountToken.free_amount -= value;
+            accountToken.pledged_amount += value;
+            break;
+        }
+        case UNPLEDGE: {
+            if (accountToken.pledged_amount < value)
+                return ERRORMSG("pledged_amount insufficient(%llu vs %llu) of %s",
+                                accountToken.pledged_amount, value, tokenSymbol);
+
+            accountToken.free_amount += value;
+            accountToken.pledged_amount -= value;
+            break;
+        }
+        case DEX_DEAL: {
+            if (pOtherAccount == nullptr)
+                return ERRORMSG("peer account not specified!");
+
+            if (accountToken.frozen_amount < value)
+                return ERRORMSG("free_amount insufficient(%llu vs %llu) of %s",
+                                accountToken.free_amount, value, tokenSymbol);
+
+            accountToken.frozen_amount -= value; // must operate the subtract first, because maybe this==pOtherAccount
+
+            CAccountToken peerToken = pOtherAccount->GetToken(tokenSymbol);
+            peerToken.free_amount += value;
+            pOtherAccount->SetToken(tokenSymbol, peerToken);
+            toUid = CUserID(pOtherAccount->keyid);
+            break;
+
         }
         default: return false;
     }
+
+    receipt.SetInfo(fromUid, toUid, tokenSymbol, value);
+    receipts.push_back(receipt);
+    return true;
 }
 
 uint64_t CAccount::ComputeVoteBcoinInterest(const uint64_t lastVotedBcoins, const uint32_t currHeight) {
@@ -182,11 +253,12 @@ uint64_t CAccount::ComputeVoteFcoinInterest(const uint64_t lastVotedBcoins, cons
     return interest;
 }
 
-uint64_t CAccount::ComputeBlockInflateInterest(const uint32_t currHeight, const VoteDelegate &curDelegate) const {
+uint64_t CAccount::ComputeBlockInflateInterest(const uint32_t currHeight, const VoteDelegate &curDelegate, const uint32_t totalDelegateNum) const {
 
     FeatureForkVersionEnum version = GetFeatureForkVersion(currHeight);
     if (version == MAJOR_VER_R1)
         return 0;
+
     uint64_t activeVotes = received_votes;
     if (version >= MAJOR_VER_R3) {
         activeVotes = curDelegate.votes;
@@ -195,24 +267,23 @@ uint64_t CAccount::ComputeBlockInflateInterest(const uint32_t currHeight, const 
     uint8_t subsidy      = ::GetSubsidyRate(currHeight);
     uint64_t holdHeight  = 1;
     uint32_t yearHeight  = ::GetYearBlockCount(currHeight);
-    uint32_t delegateNum = IniCfg().GetTotalDelegateNum();
-    uint64_t interest    = (long double)activeVotes * delegateNum * holdHeight * subsidy / yearHeight / 100;
+    uint64_t interest    = (long double)activeVotes * totalDelegateNum * holdHeight * subsidy / yearHeight / 100;
 
     LogPrint(BCLog::PROFIT,
-             "compute block inflate interest to miner: %s, current height: %u\n"
+             "[%d] compute block inflate interest to miner: %s "
              "interest = activeVotes * delegateNum * holdHeight * subsidy / yearHeight / 100\n"
              "formula: %llu = 1.0 * %llu * %u * %llu * %u / %u / 100\n",
-             regid.ToString(), currHeight, interest, activeVotes, delegateNum, holdHeight, subsidy, yearHeight);
+             currHeight, regid.ToString(), interest, activeVotes, totalDelegateNum, holdHeight, subsidy, yearHeight);
 
     return interest;
 }
 
 CAccountToken CAccount::GetToken(const TokenSymbol &tokenSymbol) const {
-    auto iter = tokens.find(tokenSymbol);
+    const auto iter = tokens.find(tokenSymbol);
     if (iter != tokens.end())
         return iter->second;
 
-    return CAccountToken();
+    return CAccountToken(); //initialize the token
 }
 
 bool CAccount::SetToken(const TokenSymbol &tokenSymbol, const CAccountToken &accountToken) {
@@ -233,25 +304,36 @@ Object CAccount::ToJsonObj() const {
     for (auto tokenPair : tokens) {
         Object tokenObj;
         const CAccountToken &token = tokenPair.second;
-        tokenObj.push_back(Pair("free_amount",      token.free_amount));
-        tokenObj.push_back(Pair("staked_amount",    token.staked_amount));
-        tokenObj.push_back(Pair("frozen_amount",    token.frozen_amount));
-        tokenObj.push_back(Pair("voted_amount",     token.voted_amount));
+
+        uint64_t total_amount = token.free_amount + token.staked_amount + token.frozen_amount
+                                + token.voted_amount + token.pledged_amount;
+
+        if (total_amount == 0)
+            continue;
+
+        tokenObj.push_back(Pair("free_amount",      JsonValueFromAmount(token.free_amount)));    //FREE
+        tokenObj.push_back(Pair("staked_amount",    JsonValueFromAmount(token.staked_amount)));  //Stake
+        tokenObj.push_back(Pair("frozen_amount",    JsonValueFromAmount(token.frozen_amount)));  //DEX
+        tokenObj.push_back(Pair("voted_amount",     JsonValueFromAmount(token.voted_amount)));   //VOTES
+        tokenObj.push_back(Pair("pledged_amount",   JsonValueFromAmount(token.pledged_amount))); //CDP
+        tokenObj.push_back(Pair("total_amount",     JsonValueFromAmount(total_amount)));         //Total
 
         tokenMapObj.push_back(Pair(tokenPair.first, tokenObj));
     }
 
     Object obj;
+    string permsString;
+    ConvertPermsToString(perms_sum, kAccountPermTitleMap.size(), permsString);
+
     obj.push_back(Pair("address",           keyid.ToAddress()));
     obj.push_back(Pair("keyid",             keyid.ToString()));
-    obj.push_back(Pair("nickid",            nickid.ToString()));
-    obj.push_back(Pair("nickid_mature",     nickid.IsMature(chainActive.Height())));
     obj.push_back(Pair("regid",             regid.ToString()));
     obj.push_back(Pair("regid_mature",      regid.IsMature(chainActive.Height())));
     obj.push_back(Pair("owner_pubkey",      owner_pubkey.ToString()));
     obj.push_back(Pair("miner_pubkey",      miner_pubkey.ToString()));
+    obj.push_back(Pair("perms",             permsString));
     obj.push_back(Pair("tokens",            tokenMapObj));
-    obj.push_back(Pair("received_votes",    received_votes));
+    obj.push_back(Pair("received_votes",    JsonValueFromAmount(received_votes)));
     obj.push_back(Pair("vote_list",         candidateVoteArray));
 
     return obj;
@@ -262,14 +344,17 @@ string CAccount::ToString() const {
     string  strTokens = "";
     for (auto pair : tokens) {
         CAccountToken &token = pair.second;
-        strTokens += strprintf ("\n %s: {free=%llu, staked=%llu, frozen=%llu}\n",
-                    pair.first, token.free_amount, token.staked_amount, token.frozen_amount);
+        strTokens += strprintf ("\n%s:{free=%llu, frozen=%llu, staked=%llu, voted=%llu, pledged=%llu}",
+                    pair.first, token.free_amount, token.frozen_amount,
+                    token.staked_amount, token.voted_amount,
+                    token.pledged_amount);
     }
     str += strprintf(
-        "regid=%s, keyid=%s, nickId=%s, owner_pubkey=%s, miner_pubkey=%s, "
-        "tokens=%s, received_votes=%llu, last_vote_height=%llu\n",
-        regid.ToString(), keyid.GetHex(), nickid.ToString(), owner_pubkey.ToString(), miner_pubkey.ToString(),
+        "regid=%s, keyid=%s, owner_pubkey=%s, miner_pubkey=%s, "
+        "tokens={%s}, received_votes=%llu, last_vote_height=%llu\n",
+        regid.ToString(), keyid.GetHex(), owner_pubkey.ToString(), miner_pubkey.ToString(),
         strTokens, received_votes, last_vote_height);
+
     str += "candidate vote list: \n";
 
     vector<CCandidateReceivedVote> candidateVotes;
@@ -333,33 +418,33 @@ bool CAccount::ProcessCandidateVotes(const vector<CCandidateVote> &candidateVote
                 uint64_t currVotes = itVote->GetVotedBcoins();
 
                 if (!IsBcoinWithinRange(vote.GetVotedBcoins()))
-                    return ERRORMSG("ProcessCandidateVotes() : oper fund value exceeds maximum ");
+                    return ERRORMSG("oper fund value exceeds maximum ");
 
                 itVote->SetVotedBcoins(currVotes + vote.GetVotedBcoins());
 
                 if (!IsBcoinWithinRange(itVote->GetVotedBcoins()))
-                    return ERRORMSG("ProcessCandidateVotes() : fund value exceeds maximum");
+                    return ERRORMSG("fund value exceeds maximum");
 
             } else {  // new vote
                 if (candidateVotesInOut.size() == IniCfg().GetMaxVoteCandidateNum()) {
-                    return ERRORMSG("ProcessCandidateVotes() : MaxVoteCandidateNum reached. Must revoke old votes 1st.");
+                    return ERRORMSG("MaxVoteCandidateNum reached. Must revoke old votes 1st.");
                 }
 
                 candidateVotesInOut.push_back(vote);
             }
         } else if (MINUS_BCOIN == voteType) {
             // if (currHeight - last_vote_height < 100) {
-            //     return ERRORMSG("ProcessCandidateVotes() : last vote not cooled down yet: lastVoteHeigh=%d",
+            //     return ERRORMSG("last vote not cooled down yet: lastVoteHeigh=%d",
             //                     last_vote_height);
             // }
             if  (itVote != candidateVotesInOut.end()) { //existing vote
                 uint64_t currVotes = itVote->GetVotedBcoins();
 
                 if (!IsBcoinWithinRange(vote.GetVotedBcoins()))
-                    return ERRORMSG("ProcessCandidateVotes() : oper fund value exceeds maximum ");
+                    return ERRORMSG("oper fund value exceeds maximum ");
 
                 if (itVote->GetVotedBcoins() < vote.GetVotedBcoins())
-                    return ERRORMSG("ProcessCandidateVotes() : oper fund value exceeds delegate fund value");
+                    return ERRORMSG("oper fund value exceeds delegate fund value");
 
                 itVote->SetVotedBcoins(currVotes - vote.GetVotedBcoins());
 
@@ -367,10 +452,10 @@ bool CAccount::ProcessCandidateVotes(const vector<CCandidateVote> &candidateVote
                     candidateVotesInOut.erase(itVote);
 
             } else {
-                return ERRORMSG("ProcessCandidateVotes() : revocation votes not exist");
+                return ERRORMSG("revocation votes not exist");
             }
         } else {
-            return ERRORMSG("ProcessCandidateVotes() : operType: %d invalid", voteType);
+            return ERRORMSG("operType: %d invalid", voteType);
         }
     }
 
@@ -393,22 +478,19 @@ bool CAccount::ProcessCandidateVotes(const vector<CCandidateVote> &candidateVote
 
     if (newTotalVotes > lastTotalVotes) {
         uint64_t addedVotes = newTotalVotes - lastTotalVotes;
-        if (!OperateBalance(SYMB::WICC, BalanceOpType::VOTE, addedVotes)) {
-            return ERRORMSG(
-                "ProcessCandidateVotes() : delegate votes exceeds account bcoins when voting! "
-                "newTotalVotes=%llu, lastTotalVotes=%llu, freeAmount=%llu",
-                newTotalVotes, lastTotalVotes, GetToken(SYMB::WICC).free_amount);
+        if (!OperateBalance(SYMB::WICC, BalanceOpType::VOTE, addedVotes, ReceiptType::DELEGATE_ADD_VOTE, receipts)) {
+            return ERRORMSG("delegate votes exceeds account bcoins when voting! "
+                            "newTotalVotes=%llu, lastTotalVotes=%llu, freeAmount=%llu",
+                            newTotalVotes, lastTotalVotes, GetToken(SYMB::WICC).free_amount);
         }
-        receipts.emplace_back(regid, nullId, SYMB::WICC, addedVotes, ReceiptCode::DELEGATE_ADD_VOTE);
+
     } else if (newTotalVotes < lastTotalVotes) {
         uint64_t subVotes = lastTotalVotes - newTotalVotes;
-        if (!OperateBalance(SYMB::WICC, BalanceOpType::UNVOTE, subVotes)) {
-            return ERRORMSG(
-                "ProcessCandidateVotes() : delegate votes insufficient to unvote! "
-                "newTotalVotes=%llu, lastTotalVotes=%llu, freeAmount=%llu",
-                newTotalVotes, lastTotalVotes, GetToken(SYMB::WICC).free_amount);
+        if (!OperateBalance(SYMB::WICC, BalanceOpType::UNVOTE, subVotes, ReceiptType::DELEGATE_SUB_VOTE, receipts)) {
+            return ERRORMSG("delegate votes insufficient to unvote! "
+                            "newTotalVotes=%llu, lastTotalVotes=%llu, freeAmount=%llu",
+                            newTotalVotes, lastTotalVotes, GetToken(SYMB::WICC).free_amount);
         }
-        receipts.emplace_back(nullId, regid, SYMB::WICC, subVotes, ReceiptCode::DELEGATE_SUB_VOTE);
     } // else newTotalVotes == lastTotalVotes // do nothing
 
     // collect inflated bcoins or fcoins
@@ -417,10 +499,10 @@ bool CAccount::ProcessCandidateVotes(const vector<CCandidateVote> &candidateVote
         uint64_t fcoinAmountToInflate = ComputeVoteFcoinInterest(lastTotalVotes, currBlockTime);
 
         if (fcoinAmountToInflate > 0) {
-            if (!OperateBalance(SYMB::WGRT, BalanceOpType::ADD_FREE, fcoinAmountToInflate)) {
-                return ERRORMSG("ProcessCandidateVotes() : add fcoins to inflate failed");
+            if (!OperateBalance(SYMB::WGRT, BalanceOpType::ADD_FREE, fcoinAmountToInflate,
+                                 ReceiptType::DELEGATE_VOTE_INTEREST, receipts)) {
+                return ERRORMSG("add fcoins to inflate failed");
             }
-            receipts.emplace_back(nullId, regid, SYMB::WGRT, fcoinAmountToInflate, ReceiptCode::DELEGATE_VOTE_INTEREST);
         }
 
         LogPrint(BCLog::PROFIT, "Account(%s) received vote staking interest amount (fcoins): %llu\n", regid.ToString(),
@@ -431,10 +513,10 @@ bool CAccount::ProcessCandidateVotes(const vector<CCandidateVote> &candidateVote
         if (!IsBcoinWithinRange(bcoinAmountToInflate))
             return false;
 
-        if (!OperateBalance(SYMB::WICC, BalanceOpType::ADD_FREE, bcoinAmountToInflate)) {
-            return ERRORMSG("ProcessCandidateVotes() : add bcoins to inflate failed");
+        if (!OperateBalance(SYMB::WICC, BalanceOpType::ADD_FREE, bcoinAmountToInflate,
+                            ReceiptType::DELEGATE_VOTE_INTEREST, receipts)) {
+            return ERRORMSG("add bcoins to inflate failed");
         }
-        receipts.emplace_back(nullId, regid, SYMB::WICC, bcoinAmountToInflate, ReceiptCode::DELEGATE_VOTE_INTEREST);
 
         LogPrint(BCLog::PROFIT, "Account(%s) received vote staking interest amount (bcoins): %llu\n",
                 regid.ToString(), bcoinAmountToInflate);
@@ -474,17 +556,48 @@ bool CAccount::StakeVoteBcoins(VoteType type, const uint64_t votes) {
     return true;
 }
 
-bool CAccount::IsMyUid(const CUserID &uid) {
+bool CAccount::IsSelfUid(const CUserID &uid) {
     if (uid.is<CKeyID>()) {
         return keyid == uid.get<CKeyID>();
     } else if (uid.is<CRegID>()) {
         return !regid.IsEmpty() && regid == uid.get<CRegID>();
     } else if (uid.is<CPubKey>()) {
         return owner_pubkey.IsValid() && owner_pubkey == uid.get<CPubKey>();
-    } else if (uid.is<CNickID>()) {
-        return !nickid.IsEmpty() && nickid == uid.get<CNickID>();
     }
+
     return false;
+}
+
+bool CAccount::CheckBalance(const TokenSymbol& symbol, const BalanceType& balanceType, const uint64_t& value) {
+    uint64_t balance;
+    auto iter = tokens.find(symbol);
+    if (iter == tokens.end())
+        balance = 0; // token not found
+    else {
+        switch (balanceType) {
+            case FREE_VALUE:
+                balance = iter->second.free_amount;
+                break;
+            case STAKED_VALUE:
+                balance = iter->second.staked_amount;
+                break;
+            case FROZEN_VALUE:
+                balance = iter->second.frozen_amount;
+                break;
+            case VOTED_VALUE:
+                balance = iter->second.voted_amount;
+                break;
+            case PLEDGED_VALUE:
+                balance = iter->second.pledged_amount;
+                break;
+            case NULL_TYPE:
+            default:
+                throw runtime_error("balance type error");
+        }
+    }
+
+    return balance >= value;
+
 }
 
 ///////////////////////////////////////////////////////////////////////////////

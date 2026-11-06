@@ -7,21 +7,51 @@
 
 #include "config/configuration.h"
 
-bool CDelegateDBCache::GetTopVoteDelegates(VoteDelegateVector &topVotedDelegates) {
 
-    // votes{(uint64t)MAX - $votedBcoins}{$RegId} --> 1
-    set<decltype(voteRegIdCache)::KeyType> topKeys;
-    voteRegIdCache.GetTopNElements(IniCfg().GetTotalDelegateNum(), topKeys);
+static const int BP_DELEGATE_VOTE_MIN = 21000;
 
-    // assert(regIds.size() == IniCfg().GetTotalDelegateNum());
+inline static CFixedUInt64 DelegateVoteToKey(uint64_t votes) {
+    static_assert(ULONG_MAX == 0xFFFFFFFFFFFFFFFF, "ULONG_MAX == 0xFFFFFFFFFFFFFFFF");
+    return CFixedUInt64(ULONG_MAX - votes);
+}
 
-    for (const auto &key : topKeys) {
-        const string &votesStr = std::get<0>(key);
-        const CRegIDKey &regIdKey = std::get<1>(key);
-        VoteDelegate votedDelegate;
-        votedDelegate.regid = regIdKey.regid;
-        votedDelegate.votes = std::strtoull(votesStr.c_str(), nullptr, 10);
-        topVotedDelegates.push_back(votedDelegate);
+inline static uint64_t DelegateVoteFromKey(const CFixedUInt64 &voteKey) {
+    static_assert(ULONG_MAX == 0xFFFFFFFFFFFFFFFF, "ULONG_MAX == 0xFFFFFFFFFFFFFFFF");
+    return ULONG_MAX - voteKey.value;
+}
+
+uint64_t CTopDelegatesIterator::GetVote() const {
+    return DelegateVoteFromKey(GetKey().first);
+}
+
+CRegID CTopDelegatesIterator::GetRegId() const {
+    return CRegID(GetKey().second);
+}
+
+bool CDelegateDBCache::GetTopVoteDelegates(uint32_t delegateNum, uint64_t BpMinVote,
+                                           VoteDelegateVector &topVoteDelegates, bool isR3Fork) {
+
+    topVoteDelegates.clear();
+    topVoteDelegates.reserve(delegateNum);
+    auto spIt = CreateTopDelegateIterator();
+    for (spIt->First(); spIt->IsValid() && topVoteDelegates.size() < delegateNum; spIt->Next()) {
+        uint64_t vote = spIt->GetVote();
+        if (isR3Fork && vote < BpMinVote) {
+            LogPrint(BCLog::INFO, "[WARN] the %lluTH delegate vote=%llu less than %llu!"
+                     " dest_delegate_num=%d\n",
+                     topVoteDelegates.size(), spIt->GetVote(), BpMinVote, delegateNum);
+            break;
+        }
+        topVoteDelegates.emplace_back(spIt->GetRegId(), spIt->GetVote());
+    }
+
+    if (topVoteDelegates.empty())
+        return ERRORMSG("[WARN] topVoteDelegates is empty! expected size=%d\n", delegateNum);
+
+    if (topVoteDelegates.size() != delegateNum) {
+        LogPrint(BCLog::INFO, "[WARN] the top delegates size=%d is less than %d"
+                    " expected_delegates_size=%d\n",
+                    topVoteDelegates.size(), BpMinVote, delegateNum);
     }
 
     return true;
@@ -32,15 +62,8 @@ bool CDelegateDBCache::SetDelegateVotes(const CRegID &regId, const uint64_t vote
     if (regId.IsEmpty()) {
         return true;
     }
-
-    delegateRegIds.clear();
-
-    static uint64_t maxNumber = 0xFFFFFFFFFFFFFFFF;
-    string strVotes           = strprintf("%016x", maxNumber - votes);
-    auto key                  = std::make_pair(strVotes, CRegIDKey(regId));
-    static uint8_t value      = 1;
-
-    return voteRegIdCache.SetData(key, value);
+    auto key = std::make_pair(DelegateVoteToKey(votes), regId.GetRegIdRaw());
+    return voteRegIdCache.SetData(key, 1);
 }
 
 bool CDelegateDBCache::EraseDelegateVotes(const CRegID &regId, const uint64_t votes) {
@@ -48,22 +71,18 @@ bool CDelegateDBCache::EraseDelegateVotes(const CRegID &regId, const uint64_t vo
     if (regId.IsEmpty()) {
         return true;
     }
+    auto key = std::make_pair(DelegateVoteToKey(votes), regId.GetRegIdRaw());
 
-    delegateRegIds.clear();
-
-    static uint64_t maxNumber = 0xFFFFFFFFFFFFFFFF;
-    string strVotes           = strprintf("%016x", maxNumber - votes);
-    auto oldKey               = std::make_pair(strVotes, CRegIDKey(regId));
-
-    return voteRegIdCache.EraseData(oldKey);
+    return voteRegIdCache.EraseData(key);
 }
 
 
 int32_t CDelegateDBCache::GetLastVoteHeight() {
     CVarIntValue<uint32_t> height;
     if (last_vote_height_cache.GetData(height))
-            return (int32_t)(height.get());
-    return 0 ;
+        return (int32_t)(height.get());
+    else
+        return 0;
 }
 
 bool CDelegateDBCache::SetLastVoteHeight(int32_t height) {
@@ -79,6 +98,13 @@ bool CDelegateDBCache::SetPendingDelegates(const PendingDelegates &delegates) {
     return pending_delegates_cache.SetData(delegates);
 
 }
+uint32_t CDelegateDBCache::GetActivedDelegateNum() {
+    VoteDelegateVector dv;
+    if (GetActiveDelegates(dv)){
+        return dv.size();
+    }
+    throw runtime_error("get actived delegate num error");
+}
 
 bool CDelegateDBCache::IsActiveDelegate(const CRegID &regid) {
     VoteDelegate delegate;
@@ -91,7 +117,7 @@ bool CDelegateDBCache::GetActiveDelegate(const CRegID &regid, VoteDelegate &vote
     if (!GetActiveDelegates(delegates))
         return false;
 
-    auto it = std::find_if(delegates.begin(), delegates.end(), [&regid](const VoteDelegate &item){
+    auto it = std::find_if (delegates.begin(), delegates.end(), [&regid](const VoteDelegate &item){
         return item.regid == regid;
     });
     if (it == delegates.end()) {
@@ -102,7 +128,11 @@ bool CDelegateDBCache::GetActiveDelegate(const CRegID &regid, VoteDelegate &vote
 }
 
 bool CDelegateDBCache::GetActiveDelegates(VoteDelegateVector &voteDelegates) {
-    return active_delegates_cache.GetData(voteDelegates);
+     bool res =  active_delegates_cache.GetData(voteDelegates);
+     if (res){
+         assert(voteDelegates.size() != 0 );
+     }
+     return res;
 }
 
 bool CDelegateDBCache::SetActiveDelegates(const VoteDelegateVector &voteDelegates) {
@@ -118,8 +148,12 @@ bool CDelegateDBCache::GetCandidateVotes(const CRegID &regId, vector<CCandidateR
     return regId2VoteCache.GetData(regId, candidateVotes);
 }
 
-bool CDelegateDBCache::GetVoterList(map<CRegIDKey, vector<CCandidateReceivedVote>> &regId2Vote) {
-    return regId2VoteCache.GetAllElements(regId2Vote);
+bool CDelegateDBCache::GetVoterList(map<CRegIDKey, vector<CCandidateReceivedVote>> &voters) {
+    auto dbIt = MakeDbIterator(regId2VoteCache);
+    for (dbIt->First(); dbIt->IsValid(); dbIt->Next()) {
+        voters[dbIt->GetKey()] = dbIt->GetValue();
+    }
+    return true;
 }
 
 bool CDelegateDBCache::Flush() {
@@ -146,4 +180,8 @@ void CDelegateDBCache::Clear() {
     last_vote_height_cache.Clear();
     pending_delegates_cache.Clear();
     active_delegates_cache.Clear();
+}
+
+shared_ptr<CTopDelegatesIterator> CDelegateDBCache::CreateTopDelegateIterator() {
+    return make_shared<CTopDelegatesIterator>(voteRegIdCache);
 }

@@ -24,12 +24,12 @@ using namespace eosio::vm;
 #define CHECK_WASM_IN_MEMORY(DATA, LENGTH) \
     if(LENGTH > 0){                        \
         CHAIN_ASSERT( pWasmContext->is_memory_in_wasm_allocator(reinterpret_cast<uint64_t>(DATA) + LENGTH - 1), \
-                      wasm_chain::wasm_memory_exception, "access violation" )}                                                     
+                      wasm_chain::wasm_memory_exception, "access violation" )}
 
 #define CHECK_WASM_DATA_SIZE(LENGTH, DATA_NAME ) \
     CHAIN_ASSERT( LENGTH <= max_wasm_api_data_bytes,                 \
                   wasm_chain::wasm_api_data_size_exceeds_exception,  \
-                  "%s size must be < %ld, but get %ld",              \
+                  "%s size must be <= %ld, but get %ld",              \
                   DATA_NAME, max_wasm_api_data_bytes, LENGTH )
 
 namespace wasm {
@@ -55,18 +55,20 @@ namespace wasm {
         get_runtime_interface()->immediately_exit_currently_running_module();
     }
 
-    std::shared_ptr <wasm_instantiated_module_interface> get_instantiated_backend(const vector <uint8_t> &code) {
+    std::shared_ptr <wasm_instantiated_module_interface> get_instantiated_backend(const vector <uint8_t> &code, const uint256 &hash) {
 
         try {
-            if(!get_wasm_instantiation_cache().has_value()){
+            auto bm_wasm_hash = MAKE_BENCHMARK("load wasm vm -- load code hash");
+            if (!get_wasm_instantiation_cache().has_value()){
                  get_wasm_instantiation_cache() = std::map <code_version_t, std::shared_ptr<wasm_instantiated_module_interface>>{};
             }
 
-            auto code_id = Hash(code.begin(), code.end());
-            auto it = get_wasm_instantiation_cache()->find(code_id);
+            if (bm_wasm_hash) bm_wasm_hash->end();
+            auto it = get_wasm_instantiation_cache()->find(hash);
             if (it == get_wasm_instantiation_cache()->end()) {
-                get_wasm_instantiation_cache().value()[code_id] = get_runtime_interface()->instantiate_module((const char*)code.data(), code.size());
-                return get_wasm_instantiation_cache().value()[code_id];
+                auto bm_wasm_load = MAKE_BENCHMARK("load wasm vm -- init module");
+                get_wasm_instantiation_cache().value()[hash] = get_runtime_interface()->instantiate_module((const char*)code.data(), code.size());
+                return get_wasm_instantiation_cache().value()[hash];
             }
             return it->second;
         } catch (...) {
@@ -75,18 +77,17 @@ namespace wasm {
 
     }
 
-    void wasm_interface::execute(const vector <uint8_t> &code, wasm_context_interface *pWasmContext) {
+    void wasm_interface::execute(const vector <uint8_t> &code, const uint256 &hash, wasm_context_interface *pWasmContext) {
 
+
+        auto bm_wasm_load = MAKE_BENCHMARK("load wasm vm with code");
         pWasmContext->pause_billing_timer();
-        auto pInstantiated_module = get_instantiated_backend(code);
+        auto pInstantiated_module = get_instantiated_backend(code, hash);
         pWasmContext->resume_billing_timer();
+        if (bm_wasm_load) bm_wasm_load->end();
 
-        //system_clock::time_point start = system_clock::now();
+        auto bm_wasm_exec = MAKE_BENCHMARK("execute wasm vm with code");
         pInstantiated_module->apply(pWasmContext);
-        // system_clock::time_point end = system_clock::now();
-        // std::cout << std::string("wasm duration:")
-        //           << std::chrono::duration_cast<std::chrono::microseconds>(end - start).count() << std::endl;
-
     }
 
     void wasm_interface::validate(const vector <uint8_t> &code) {
@@ -96,7 +97,7 @@ namespace wasm {
              size_t        code_size  = code.size();
              wasm_code_ptr code_ptr(code_bytes, code_size);
              auto bkend               = backend_validate_t(code_ptr, code_size);
-             rhf_t::resolve(bkend.get_module()); 
+             rhf_t::resolve(bkend.get_module());
         } catch (vm::exception &e) {
             CHAIN_THROW(wasm_chain::code_parse_exception, e.detail())
         }
@@ -106,17 +107,22 @@ namespace wasm {
 
     void wasm_interface::initialize(vm_type vm) {
 
-        if (vm == wasm::vm_type::eos_vm)
-            get_runtime_interface() = std::make_shared<wasm::wasm_vm_runtime<vm::interpreter>>();
-        else if (vm == wasm::vm_type::eos_vm_jit)
-            get_runtime_interface() = std::make_shared<wasm::wasm_vm_runtime<vm::jit>>();
-        else
-            get_runtime_interface() = std::make_shared<wasm::wasm_vm_runtime<vm::interpreter>>();
+        static bool wasm_interface_inited = false;
+        if(!wasm_interface_inited){
+            wasm_interface_inited = true;
+
+	        if (vm == wasm::vm_type::eos_vm)
+	            get_runtime_interface() = std::make_shared<wasm::wasm_vm_runtime<vm::interpreter>>();
+	        else if (vm == wasm::vm_type::eos_vm_jit)
+	            get_runtime_interface() = std::make_shared<wasm::wasm_vm_runtime<vm::jit>>();
+	        else
+	            get_runtime_interface() = std::make_shared<wasm::wasm_vm_runtime<vm::interpreter>>();
+    	}
 
     }
 
     class wasm_host_methods {
-        
+
     public:
         wasm_host_methods( wasm_context_interface *pCtx ) {
             pWasmContext = pCtx;
@@ -141,8 +147,8 @@ namespace wasm {
         }
 
         void wasm_assert_message( uint32_t test,  const void *msg, uint32_t msg_len ) {
-            if (!test) {             
-                CHECK_WASM_IN_MEMORY( msg,     msg_len)
+            if (!test) {
+                //CHECK_WASM_IN_MEMORY( msg,     msg_len)
                 CHECK_WASM_DATA_SIZE( msg_len, "msg"  )
 
                 std::string str = string((const char *) msg, msg_len);
@@ -159,7 +165,7 @@ namespace wasm {
         }
 
         void wasm_exit( int32_t code ){
-            pWasmContext->exit();
+            //pWasmContext->exit();
         }
 
         uint64_t current_time() {
@@ -173,10 +179,10 @@ namespace wasm {
         uint32_t read_action_data( void* data, uint32_t data_len ) {
             uint32_t s = pWasmContext->get_action_data_size();
             if (data_len == 0) return s;
-   
+
             uint32_t copy_len = std::min(data_len, s);
 
-            CHECK_WASM_IN_MEMORY(data,     copy_len)
+            //CHECK_WASM_IN_MEMORY(data,     copy_len)
             CHECK_WASM_DATA_SIZE(copy_len, "data"  )
 
             std::memcpy(data, pWasmContext->get_action_data(), copy_len);
@@ -194,8 +200,8 @@ namespace wasm {
 
 
         void assert_sha1(const void * data, uint32_t data_len, void* hash_val) {
-            CHECK_WASM_IN_MEMORY(data,     data_len)
-            CHECK_WASM_IN_MEMORY(hash_val, 20      )
+            //CHECK_WASM_IN_MEMORY(data,     data_len)
+            //CHECK_WASM_IN_MEMORY(hash_val, 20      )
             CHECK_WASM_DATA_SIZE(data_len, "data"  )
 
             checksum160_type checksum;
@@ -204,8 +210,8 @@ namespace wasm {
         }
 
         void assert_sha256(const void * data, uint32_t data_len, void* hash_val) {
-            CHECK_WASM_IN_MEMORY(data,     data_len)
-            CHECK_WASM_IN_MEMORY(hash_val, 32      )
+            //CHECK_WASM_IN_MEMORY(data,     data_len)
+            //CHECK_WASM_IN_MEMORY(hash_val, 32      )
             CHECK_WASM_DATA_SIZE(data_len, "data"  )
 
             checksum256_type checksum;
@@ -214,8 +220,8 @@ namespace wasm {
         }
 
         void assert_sha512(const void * data, uint32_t data_len, void* hash_val) {
-            CHECK_WASM_IN_MEMORY(data,     data_len)
-            CHECK_WASM_IN_MEMORY(hash_val, 64      )
+            //CHECK_WASM_IN_MEMORY(data,     data_len)
+            //CHECK_WASM_IN_MEMORY(hash_val, 64      )
             CHECK_WASM_DATA_SIZE(data_len, "data"  )
 
             checksum512_type checksum;
@@ -224,8 +230,8 @@ namespace wasm {
         }
 
         void assert_ripemd160(const void * data, uint32_t data_len, void* hash_val) {
-            CHECK_WASM_IN_MEMORY(data,     data_len)
-            CHECK_WASM_IN_MEMORY(hash_val, 20      )
+            //CHECK_WASM_IN_MEMORY(data,     data_len)
+            //CHECK_WASM_IN_MEMORY(hash_val, 20      )
             CHECK_WASM_DATA_SIZE(data_len, "data"  )
 
             checksum160_type checksum;
@@ -234,33 +240,33 @@ namespace wasm {
         }
 
         void sha1( const void *data, uint32_t data_len, void *hash_val ) {
-            CHECK_WASM_IN_MEMORY(data,     data_len)
-            CHECK_WASM_IN_MEMORY(hash_val, 20      )
+            //CHECK_WASM_IN_MEMORY(data,     data_len)
+            //CHECK_WASM_IN_MEMORY(hash_val, 20      )
             CHECK_WASM_DATA_SIZE(data_len, "data"  )
 
             SHA1((const unsigned char*)data, data_len, (unsigned char *)hash_val);
         }
 
         void sha256( const void *data, uint32_t data_len, void *hash_val ) {
-            CHECK_WASM_IN_MEMORY(data,     data_len)
-            CHECK_WASM_IN_MEMORY(hash_val, 32      )
+            //CHECK_WASM_IN_MEMORY(data,     data_len)
+            //CHECK_WASM_IN_MEMORY(hash_val, 32      )
             CHECK_WASM_DATA_SIZE(data_len, "data"  )
 
             SHA256((const unsigned char*)data, data_len, (unsigned char *)hash_val);
         }
 
         void sha512( const void *data, uint32_t data_len, void *hash_val ) {
-            CHECK_WASM_IN_MEMORY(data,     data_len)
-            CHECK_WASM_IN_MEMORY(hash_val, 64      )
+            //CHECK_WASM_IN_MEMORY(data,     data_len)
+            //CHECK_WASM_IN_MEMORY(hash_val, 64      )
             CHECK_WASM_DATA_SIZE(data_len, "data"  )
 
             SHA512((const unsigned char*)data, data_len, (unsigned char *)hash_val);
         }
 
         void ripemd160( const void *data, uint32_t data_len, void *hash_val ) {
-            CHECK_WASM_IN_MEMORY(data,     data_len)
-            CHECK_WASM_IN_MEMORY(hash_val, 20      )
-            CHECK_WASM_DATA_SIZE(data_len, "data"  )            
+            //CHECK_WASM_IN_MEMORY(data,     data_len)
+            //CHECK_WASM_IN_MEMORY(hash_val, 20      )
+            CHECK_WASM_DATA_SIZE(data_len, "data"  )
 
             RIPEMD160((const unsigned char*)data, data_len, (unsigned char *)hash_val);
         }
@@ -268,11 +274,11 @@ namespace wasm {
         //database
         int32_t db_store( const uint64_t payer, const void *key, uint32_t key_len, const void *val, uint32_t val_len ) {
 
-            CHECK_WASM_IN_MEMORY(key, key_len)
-            CHECK_WASM_IN_MEMORY(val, val_len)
+            //CHECK_WASM_IN_MEMORY(key, key_len)
+            //CHECK_WASM_IN_MEMORY(val, val_len)
 
-            CHECK_WASM_DATA_SIZE(key_len, "key"  )  
-            CHECK_WASM_DATA_SIZE(val_len, "value") 
+            CHECK_WASM_DATA_SIZE(key_len, "key"  )
+            CHECK_WASM_DATA_SIZE(val_len, "value")
 
             string k        = string((const char *) key, key_len);
             string v        = string((const char *) val, val_len);
@@ -280,9 +286,9 @@ namespace wasm {
 
             AddPrefix(contract, k);
 
-            CHAIN_ASSERT( pWasmContext->set_data(contract, k, v), 
-                          wasm_chain::wasm_assert_exception, 
-                          "db_store failed, key: %s", ToHex(k))
+            CHAIN_ASSERT( pWasmContext->set_data(contract, k, v),
+                          wasm_chain::wasm_assert_exception,
+                          "db_store failed, key: %s", to_hex(k))
 
             pWasmContext->update_storage_usage(payer, k.size() + v.size());
             return 1;
@@ -290,16 +296,16 @@ namespace wasm {
 
         int32_t db_remove( const uint64_t payer, const void *key, uint32_t key_len ) {
 
-            CHECK_WASM_IN_MEMORY(key,     key_len)
-            CHECK_WASM_DATA_SIZE(key_len, "key"  ) 
+            //CHECK_WASM_IN_MEMORY(key,     key_len)
+            CHECK_WASM_DATA_SIZE(key_len, "key"  )
 
             string k        = string((const char *) key, key_len);
             auto   contract = pWasmContext->receiver();
             AddPrefix(contract, k);
 
             CHAIN_ASSERT( pWasmContext->erase_data(contract, k),
-                          wasm_chain::wasm_assert_exception, 
-                          "db_remove failed, key: %s", ToHex(k))
+                          wasm_chain::wasm_assert_exception,
+                          "db_remove failed, key: %s", to_hex(k))
 
             pWasmContext->update_storage_usage(payer, k.size());
             return 1;
@@ -307,8 +313,8 @@ namespace wasm {
 
         int32_t db_get( const void *key, uint32_t key_len, void *val, uint32_t val_len ) {
 
-            CHECK_WASM_IN_MEMORY(key,     key_len)
-            CHECK_WASM_DATA_SIZE(key_len, "key"  )          
+            //CHECK_WASM_IN_MEMORY(key,     key_len)
+            CHECK_WASM_DATA_SIZE(key_len, "key"  )
 
             string k        = string((const char *) key, key_len);
             auto   contract = pWasmContext->receiver();
@@ -320,8 +326,8 @@ namespace wasm {
             auto size    = v.size();
             if (val_len == 0) return size;
 
-            CHECK_WASM_IN_MEMORY(val,     val_len)
-            CHECK_WASM_DATA_SIZE(val_len, "value")  
+            //CHECK_WASM_IN_MEMORY(val,     val_len)
+            CHECK_WASM_DATA_SIZE(val_len, "value")
 
             auto val_size = val_len > size ? size : val_len;
             std::memcpy(val, v.data(), val_size);
@@ -332,19 +338,19 @@ namespace wasm {
 
         int32_t db_update( const uint64_t payer, const void *key, uint32_t key_len, const void *val, uint32_t val_len ) {
 
-            CHECK_WASM_IN_MEMORY(key,     key_len)
-            CHECK_WASM_IN_MEMORY(val,     val_len)
-            CHECK_WASM_DATA_SIZE(key_len, "key"  )  
-            CHECK_WASM_DATA_SIZE(val_len, "value")            
+            //CHECK_WASM_IN_MEMORY(key,     key_len)
+            //CHECK_WASM_IN_MEMORY(val,     val_len)
+            CHECK_WASM_DATA_SIZE(key_len, "key"  )
+            CHECK_WASM_DATA_SIZE(val_len, "value")
 
             string k        = string((const char *) key, key_len);
             string v        = string((const char *) val, val_len);
             auto   contract = pWasmContext->receiver();
             AddPrefix(contract, k);
 
-            CHAIN_ASSERT( pWasmContext->set_data(contract, k, v), 
-                          wasm_chain::wasm_assert_exception, 
-                          "db_update failed, key: %s", ToHex(k))
+            CHAIN_ASSERT( pWasmContext->set_data(contract, k, v),
+                          wasm_chain::wasm_assert_exception,
+                          "db_update failed, key: %s", to_hex(k))
 
             pWasmContext->update_storage_usage(payer, k.size() + v.size());
             return 1;
@@ -354,25 +360,25 @@ namespace wasm {
         //memory
         void *memcpy( void *dest, const void *src, int len ) {
             CHAIN_ASSERT( (size_t)(std::abs((ptrdiff_t)dest - (ptrdiff_t)src)) >= len,
-                          wasm_chain::overlapping_memory_error, 
+                          wasm_chain::overlapping_memory_error,
                           "memcpy can only accept non-aliasing pointers");
 
-            CHECK_WASM_IN_MEMORY(dest, len)
-            CHECK_WASM_IN_MEMORY(src,  len)
+            //CHECK_WASM_IN_MEMORY(dest, len)
+            //CHECK_WASM_IN_MEMORY(src,  len)
 
             return (char *) std::memcpy(dest, src, len);
         }
 
         void *memmove( void *dest, const void *src, int len ) {
-            CHECK_WASM_IN_MEMORY(dest, len)
-            CHECK_WASM_IN_MEMORY(src,  len)
+            //CHECK_WASM_IN_MEMORY(dest, len)
+            //CHECK_WASM_IN_MEMORY(src,  len)
 
             return (char *) std::memmove(dest, src, len);
         }
 
         int memcmp( const void *dest, const void *src, int len ) {
-            CHECK_WASM_IN_MEMORY(dest, len)
-            CHECK_WASM_IN_MEMORY(src,  len)
+            //CHECK_WASM_IN_MEMORY(dest, len)
+            //CHECK_WASM_IN_MEMORY(src,  len)
 
             int ret = std::memcmp(dest, src, len);
             if (ret < 0)
@@ -383,7 +389,7 @@ namespace wasm {
         }
 
         void *memset( void *dest, int val, int len ) {
-            CHECK_WASM_IN_MEMORY(dest, len)
+            //CHECK_WASM_IN_MEMORY(dest, len)
 
             return (char *) std::memset(dest, val, len);
         }
@@ -413,9 +419,9 @@ namespace wasm {
         void prints( const void *str ) {
 
             //fixme:should be have the limited of the length str
-            auto size = strlen((const char*)str); 
-            CHECK_WASM_IN_MEMORY(str,  size )
-            CHECK_WASM_DATA_SIZE(size, "str") 
+            auto size = strlen((const char*)str);
+            //CHECK_WASM_IN_MEMORY(str,  size )
+            CHECK_WASM_DATA_SIZE(size, "str")
 
             if (!print_ignore) {
                 std::ostringstream o;
@@ -426,8 +432,8 @@ namespace wasm {
 
         void prints_l( const void *str, uint32_t str_len ) {
 
-            CHECK_WASM_IN_MEMORY(str,     str_len)
-            CHECK_WASM_DATA_SIZE(str_len, "str"  ) 
+            //CHECK_WASM_IN_MEMORY(str,     str_len)
+            CHECK_WASM_DATA_SIZE(str_len, "str"  )
 
             if (!print_ignore) {
                 pWasmContext->console_append(string((const char*)str, str_len));
@@ -520,15 +526,15 @@ namespace wasm {
 
         void printhex( const char *data, uint32_t data_len ) {
 
-            CHECK_WASM_IN_MEMORY(data,     data_len)
-            CHECK_WASM_DATA_SIZE(data_len, "data"  ) 
+            //CHECK_WASM_IN_MEMORY(data,     data_len)
+            CHECK_WASM_DATA_SIZE(data_len, "data"  )
 
             if (!print_ignore) {
                 string str((const char*)data, data_len);
-                pWasmContext->console_append(ToHex(str));
+                pWasmContext->console_append(to_hex(str));
             }
         }
-        
+
         //authorization
         void require_auth( uint64_t account ) {
             pWasmContext->require_auth(account);
@@ -542,13 +548,13 @@ namespace wasm {
             return pWasmContext->has_authorization(account);
         }
 
-        void require_recipient( uint64_t recipient ) {
-            CHAIN_ASSERT( is_account(recipient), 
-                          wasm_chain::account_access_exception, 
+        void notify_recipient( uint64_t recipient ) {
+            CHAIN_ASSERT( is_account(recipient),
+                          wasm_chain::account_access_exception,
                           "can not send a receipt to a non-exist account '%s'",
-                          wasm::name(recipient).to_string());
+                          wasm::regid(recipient).to_string());
 
-            pWasmContext->require_recipient(recipient);
+            pWasmContext->notify_recipient(recipient);
 
         }
 
@@ -559,8 +565,8 @@ namespace wasm {
         //transaction
         void send_inline( void *data, uint32_t data_len ) {
 
-            CHECK_WASM_IN_MEMORY(data,     data_len)
-            CHECK_WASM_DATA_SIZE(data_len, "data"  ) 
+            //CHECK_WASM_IN_MEMORY(data,     data_len)
+            CHECK_WASM_DATA_SIZE(data_len, "data"  )
 
             inline_transaction trx = wasm::unpack<inline_transaction>((const char *) data, data_len);
 
@@ -569,21 +575,56 @@ namespace wasm {
         }
 
         uint32_t get_active_producers(void *producers, uint32_t data_len){
-            
+
             //get active producers
             std::vector<uint64_t> active_producers = pWasmContext->get_active_producers();
 
             size_t len   = active_producers.size() * sizeof(uint64_t);
-            if(data_len == 0) return len;
+            if (data_len == 0) return len;
 
             auto copy_len = std::min( static_cast<size_t>(data_len), len );
 
-            CHECK_WASM_IN_MEMORY(producers, copy_len)
-            CHECK_WASM_DATA_SIZE(copy_len,  "data"  ) 
+            //CHECK_WASM_IN_MEMORY(producers, copy_len)
+            CHECK_WASM_DATA_SIZE(copy_len,  "data"  )
 
             std::memcpy(producers, active_producers.data(), copy_len);
             return copy_len;
         }
+
+
+        uint64_t get_maintainer(uint64_t contract) {
+            return pWasmContext->get_maintainer(contract);
+        }
+
+        uint32_t get_txid(void *data) {
+            TxID txid = pWasmContext->get_txid();
+            std::memcpy(data, txid.begin(), 32);
+
+            return 32;
+        }
+
+        uint32_t get_system_asset_price(uint64_t base_symbol, uint64_t quote_symbol, void* data, uint32_t data_len ) {
+
+            std::vector<char> price;
+            bool success = pWasmContext->get_system_asset_price(base_symbol, quote_symbol, price);
+            if (!success) return 0;
+
+            size_t len = price.size();
+            if (data_len == 0) return len;
+
+            auto copy_len = std::min( static_cast<size_t>(data_len), len );
+            CHECK_WASM_DATA_SIZE(copy_len,  "data")
+
+            std::memcpy(data, price.data(), copy_len);
+            return copy_len;
+        }
+
+        void emit_result(const char *name, uint32_t name_sz, const char *type, uint32_t type_sz,
+                            const char *value, uint32_t value_sz) {
+            pWasmContext->emit_result(string_view(name, name_sz), string_view(type, type_sz),
+                    string_view(value, value_sz));
+        }
+
 
         //llvm compiler builtins rt apis( GCC low-level runtime library ), eg. std:string in contract
         void __ashlti3( __int128 &ret, uint64_t low, uint64_t high, uint32_t shift ) {
@@ -884,106 +925,104 @@ namespace wasm {
 
     };
 
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, abort,            abort)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, wasm_exit,        wasm_exit)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, wasm_assert,      wasm_assert)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, wasm_assert_code, wasm_assert_code)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, current_time,     current_time)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, abort,                   abort)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, wasm_exit,               wasm_exit)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, wasm_assert,             wasm_assert)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, wasm_assert_code,        wasm_assert_code)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, current_time,            current_time)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, read_action_data,        read_action_data)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, action_data_size,        action_data_size)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, current_receiver,        current_receiver)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, assert_sha1,             assert_sha1)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, assert_sha256,           assert_sha256)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, assert_sha512,           assert_sha512)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, assert_ripemd160,        assert_ripemd160)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, sha1,                    sha1)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, sha256,                  sha256)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, sha512,                  sha512)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, ripemd160,               ripemd160)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, db_store,                db_store)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, db_remove,               db_remove)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, db_get,                  db_get)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, db_update,               db_update)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, memcpy,                  memcpy)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, memmove,                 memmove)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, memcmp,                  memcmp)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, memset,                  memset)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, printn,                  printn)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, printui,                 printui)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, printi,                  printi)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, prints,                  prints)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, prints_l,                prints_l)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, printi128,               printi128)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, printui128,              printui128)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, printsf,                 printsf)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, printdf,                 printdf)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, printhex,                printhex)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, printqf,                 printqf)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, is_account,              is_account)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, send_inline,             send_inline)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, require_auth,            require_auth)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, notify_recipient,        notify_recipient)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, has_authorization,       has_auth)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, get_active_producers,    get_active_producers)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, get_txid,                get_txid)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, get_maintainer,          get_maintainer)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, get_system_asset_price,  get_system_asset_price)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, emit_result,  emit_result)
 
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, read_action_data, read_action_data)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, action_data_size, action_data_size)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, current_receiver, current_receiver)
 
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, assert_sha1,      assert_sha1)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, assert_sha256,    assert_sha256)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, assert_sha512,    assert_sha512)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, assert_ripemd160, assert_ripemd160)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __ashlti3,               __ashlti3)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __ashrti3,               __ashrti3)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __lshlti3,               __lshlti3)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __lshrti3,               __lshrti3)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __divti3,                __divti3)
 
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, sha1,      sha1)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, sha256,    sha256)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, sha512,    sha512)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, ripemd160, ripemd160)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __udivti3,               __udivti3)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __multi3,                __multi3)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __modti3,                __modti3)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __umodti3,               __umodti3)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __addtf3,                __addtf3)
 
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, db_store,  db_store)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, db_remove, db_remove)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, db_get,    db_get)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, db_update, db_update)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __subtf3,                __subtf3)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __multf3,                __multf3)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __divtf3,                __divtf3)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __negtf2,                __negtf2)
 
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, memcpy,  memcpy)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, memmove, memmove)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, memcmp,  memcmp)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, memset,  memset) 
-    
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, printn,     printn)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, printui,    printui)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, printi,     printi)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, prints,     prints)     
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, prints_l,   prints_l)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, printi128,  printi128)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, printui128, printui128)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, printsf,    printsf) 
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, printdf,    printdf)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, printhex,   printhex)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, printqf,    printqf) 
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __extendsftf2,           __extendsftf2)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __extenddftf2,           __extenddftf2)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __trunctfdf2,            __trunctfdf2)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __trunctfsf2,            __trunctfsf2)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __fixtfsi,               __fixtfsi)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __fixtfdi,               __fixtfdi)
 
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, is_account,   is_account)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, send_inline,  send_inline) 
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, require_auth, require_auth)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, require_recipient,    require_recipient) 
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, has_authorization,    has_auth)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, get_active_producers, get_active_producers) 
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __fixtfti,               __fixtfti)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __fixunstfsi,            __fixunstfsi)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __fixunstfdi,            __fixunstfdi)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __fixunstfti,            __fixunstfti)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __fixsfti,               __fixsfti)
 
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __ashlti3, __ashlti3)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __ashrti3, __ashrti3)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __lshlti3, __lshlti3) 
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __lshrti3, __lshrti3)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __divti3,  __divti3) 
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __fixdfti,               __fixdfti)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __fixunssfti,            __fixunssfti)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __fixunsdfti,            __fixunsdfti)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __floatsidf,             __floatsidf)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __floatsitf,             __floatsitf)
 
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __udivti3, __udivti3)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __multi3,  __multi3)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __modti3,  __modti3) 
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __umodti3, __umodti3)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __addtf3,  __addtf3)  
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __floatditf,             __floatditf)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __floatunsitf,           __floatunsitf)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __floatunditf,           __floatunditf)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __floattidf,             __floattidf)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __floatuntidf,           __floatuntidf)
 
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __subtf3, __subtf3)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __multf3, __multf3)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __divtf3, __divtf3) 
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __negtf2, __negtf2)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __eqtf2,                 __eqtf2)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __netf2,                 __netf2)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __getf2,                 __getf2)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __gttf2,                 __gttf2)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __letf2,                 __letf2)
 
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __extendsftf2, __extendsftf2)  
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __extenddftf2, __extenddftf2)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __trunctfdf2,  __trunctfdf2)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __trunctfsf2,  __trunctfsf2) 
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __fixtfsi,     __fixtfsi)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __fixtfdi,     __fixtfdi) 
-
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __fixtfti,    __fixtfti)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __fixunstfsi, __fixunstfsi)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __fixunstfdi, __fixunstfdi) 
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __fixunstfti, __fixunstfti)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __fixsfti,    __fixsfti)  
-
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __fixdfti,    __fixdfti)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __fixunssfti, __fixunssfti)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __fixunsdfti, __fixunsdfti) 
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __floatsidf,  __floatsidf)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __floatsitf,  __floatsitf)    
-
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __floatditf,   __floatditf)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __floatunsitf, __floatunsitf)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __floatunditf, __floatunditf) 
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __floattidf,   __floattidf)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __floatuntidf, __floatuntidf) 
-
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __eqtf2, __eqtf2)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __netf2, __netf2)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __getf2, __getf2) 
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __gttf2, __gttf2)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __letf2, __letf2)   
-    
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __lttf2,    __lttf2) 
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __cmptf2,   __cmptf2)
-    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __unordtf2, __unordtf2) 
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __lttf2,                 __lttf2)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __cmptf2,                __cmptf2)
+    REGISTER_WASM_VM_INTRINSIC(wasm_host_methods, env, __unordtf2,              __unordtf2)
 
 }//wasm
 

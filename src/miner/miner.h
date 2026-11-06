@@ -30,7 +30,7 @@ using namespace std;
 
 //////////////////////////////////////////////////////////////////////////////
 //
-// ThreadProduceBlocks
+// ThreadBlockProducing
 //
 
 struct Miner {
@@ -66,7 +66,7 @@ public:
     int64_t time;             // block time
     int64_t nonce;            // nonce
     int32_t height;           // block height
-    uint64_t totalFuel;       // the total fuels of all transactions in the block
+    uint64_t totalFuelFee;    // the total fuel fee of all transactions in the block
     uint fuelRate;            // block fuel rate
     uint64_t txCount;         // transaction count in block, exclude coinbase
     uint64_t totalBlockSize;  // block size(bytes)
@@ -85,7 +85,7 @@ vector<MinedBlockInfo> GetMinedBlocks(uint32_t count);
 /** Run the miner threads */
 void GenerateProduceBlockThread(bool fGenerate, CWallet *pWallet, int32_t nThreads);
 
-bool VerifyRewardTx(const CBlock *pBlock, CCacheWrapper &cwIn, bool bNeedRunTx, VoteDelegate &curDelegateOut);
+bool VerifyRewardTx(const CBlock *pBlock, CCacheWrapper &cwIn, VoteDelegate &curDelegateOut, uint32_t& totalDelegateNumOut);
 
 /** Check mined block */
 bool CheckWork(CBlock *pBlock);
@@ -93,9 +93,10 @@ bool CheckWork(CBlock *pBlock);
 /** Get burn element */
 uint32_t GetElementForBurn(CBlockIndex *pIndex);
 
-void GetPriorityTx(vector<TxPriority> &vecPriority, int32_t nFuelRate);
+void GetPriorityTx(CCacheWrapper &cw, vector<TxPriority> &vecPriority, int32_t nFuelRate);
 
-void ShuffleDelegates(const int32_t nCurHeight, const int64_t blockTime,VoteDelegateVector &delegates);
+void ShuffleDelegates(const int32_t nCurHeight, const int64_t blockTime,
+        VoteDelegateVector &delegates);
 
 bool GetCurrentDelegate(const int64_t currentTime, const int32_t currHeight,
                         const VoteDelegateVector &delegates, VoteDelegate &delegate);

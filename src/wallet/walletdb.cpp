@@ -14,9 +14,11 @@
 #include "sync.h"
 #include "tx/tx.h"
 #include "wallet.h"
+#include "net.h"
 
 #include <algorithm>
 #include <boost/filesystem.hpp>
+#include <boost/scoped_ptr.hpp>
 #include <fstream>
 #include <iterator>
 
@@ -56,7 +58,7 @@ bool ReadKeyValue(CWallet* pWallet, CDataStream& ssKey, CDataStream& ssValue, st
             CKeyID cKeyid;
             ssKey >> cKeyid;
             ssValue >> keyCombi;
-            if (keyCombi.HaveMainKey()) {
+            if (keyCombi.HasMainKey()) {
                 if (cKeyid != keyCombi.GetCKeyID()) {
                     strErr = "Error reading wallet database: keystore corrupt";
                     return false;
@@ -85,11 +87,12 @@ bool ReadKeyValue(CWallet* pWallet, CDataStream& ssKey, CDataStream& ssValue, st
 
         } else if (strType == "blocktx") {
             uint256 hash;
-            CAccountTx atx;
+            CWalletAccountTxDb acctTxDb;
             ssKey >> hash;
-            ssValue >> atx;
+            ssValue >> acctTxDb;
             if (pWallet != nullptr)
-                pWallet->mapInBlockTx[hash] = atx;
+                pWallet->mapInBlockTx[hash] = acctTxDb;
+
         } else if (strType == "defaultkey") {
             if (pWallet != nullptr)
                 ssValue >> pWallet->vchDefaultKey;
@@ -273,7 +276,7 @@ bool CWalletDB::Recover(CDBEnv& dbenv, string filename, bool fOnlyKeys) {
 
 bool CWalletDB::Recover(CDBEnv& dbenv, string filename) { return CWalletDB::Recover(dbenv, filename, false); }
 
-bool CWalletDB::WriteBlockTx(const uint256& hash, const CAccountTx& atx) {
+bool CWalletDB::WriteBlockTx(const uint256& hash, const CWalletAccountTxDb& atx) {
     nWalletDBUpdated++;
     return Write(make_pair(string("blocktx"), hash), atx);
 }
@@ -405,14 +408,18 @@ void ThreadFlushWalletDB(const string& strFile) {
 }
 
 void ThreadRelayTx(CWallet* pWallet) {
-    RenameThread("relay-tx");
+    RenameThread("coin-relaytx");
     while (pWallet) {
         MilliSleep(60 * 1000);
-        map<uint256, std::shared_ptr<CBaseTx> >::iterator iterTx = pWallet->unconfirmedTx.begin();
-        for (; iterTx != pWallet->unconfirmedTx.end(); ++iterTx) {
-            if (mempool.Exists(iterTx->first)) {
-                RelayTransaction(iterTx->second.get(), iterTx->first);
-                LogPrint(BCLog::NET, "ThreadRelayTx resend tx hash:%s time:%ld\n", iterTx->first.GetHex(), GetTime());
+        map<uint256, std::shared_ptr<CBaseTx> > relayTxMap;
+        {
+            LOCK(pWallet->cs_wallet);
+            relayTxMap = pWallet->unconfirmedTx; // copy the tx map to avoid cycle thread lock
+        }
+        for (auto item : relayTxMap) {
+            if (mempool.Exists(item.first)) {
+                RelayTransaction(item.second.get(), item.first);
+                LogPrint(BCLog::NET, "ThreadRelayTx resend tx hash:%s time:%ld\n", item.first.GetHex(), GetTime());
             }
         }
     }

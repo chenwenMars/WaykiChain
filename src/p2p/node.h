@@ -18,9 +18,9 @@
 #include "commons/random.h"
 #include "p2p/netmessage.h"
 
-class CNode ;
+class CNode;
 struct CNodeSignals;
-struct CNodeState ;
+struct CNodeState;
 
 typedef int32_t NodeId;
 extern CCriticalSection cs_nLastNodeId;
@@ -56,31 +56,16 @@ struct CNodeSignals {
 };
 
 inline uint32_t SendBufferSize() { return 1000 * SysCfg().GetArg("-maxsendbuffer", 1 * 1000); }
+inline uint32_t MaxPbftMsgSize() { return SysCfg().GetArg("-maxpbftmsgsize", 11 * 1000); }
 
 
 
 CAddress GetLocalAddress(const CNetAddr* paddrPeer = nullptr);
 bool GetLocal(CService& addr, const CNetAddr* paddrPeer = nullptr);
 
-class CNodeStats {
-public:
-    NodeId nodeid;
-    uint64_t nServices;
-    int64_t nLastSend;
-    int64_t nLastRecv;
-    int64_t nTimeConnected;
-    string addrName;
-    int32_t nVersion;
-    string cleanSubVer;
-    bool fInbound;
-    int32_t nStartingHeight;
-    uint64_t nSendBytes;
-    uint64_t nRecvBytes;
-    bool fSyncNode;
-    double dPingTime;
-    double dPingWait;
-    string addrLocal;
-};
+void InitializeNode(NodeId nodeid, const CNode *pNode);
+
+void FinalizeNode(NodeId nodeid);
 
 struct CBlockReject {
     uint8_t chRejectCode;
@@ -127,7 +112,7 @@ struct CNodeState {
 };
 
 // Requires cs_mapNodeState.
-CNodeState *State(NodeId pNode) ;
+CNodeState *State(NodeId pNode);
 
 /** Information about a peer */
 class CNode {
@@ -209,11 +194,11 @@ public:
     multimap<int64_t, CInv> mapAskFor;  //向网络请求交易的时间, a priority queue
 
 
-    mruset<CBlockConfirmMessage> setBlockConfirmMsgKnown ;
-    CCriticalSection cs_blockConfirm ;
+    mruset<CBlockConfirmMessage> setBlockConfirmMsgKnown;
+    CCriticalSection cs_blockConfirm;
 
-    mruset<CBlockFinalityMessage> setBlockFinalityMsgKnown ;
-    CCriticalSection cs_blockFinality ;
+    mruset<CBlockFinalityMessage> setBlockFinalityMsgKnown;
+    CCriticalSection cs_blockFinality;
 
     // Ping time measurement
     uint64_t nPingNonceSent;
@@ -253,7 +238,9 @@ public:
         fGetAddr                 = false;
         fRelayTxes               = false;
         setInventoryKnown.max_size(SendBufferSize() / 1000);
-        setBlockConfirmMsgKnown.max_size(200);
+        auto maxPbftMsgSize = MaxPbftMsgSize();
+        setBlockConfirmMsgKnown.max_size(maxPbftMsgSize);
+        setBlockFinalityMsgKnown.max_size(maxPbftMsgSize);
         pFilter        = new CBloomFilter();
         nPingNonceSent = 0;
         nPingUsecStart = 0;
@@ -351,24 +338,18 @@ public:
     }
 
     void AddInventoryKnown(const CInv& inv) {
-        {
-            LOCK(cs_inventory);
-            setInventoryKnown.insert(inv);
-        }
+        LOCK(cs_inventory);
+        setInventoryKnown.insert(inv);
     }
 
     void PushInventory(const CInv& inv, bool forced = false) {
-        {
-            LOCK(cs_inventory);
+        LOCK(cs_inventory);
 
-            if(forced){
-                setForceToSend.insert(inv);
-            }
+        if (forced)
+            setForceToSend.insert(inv);
 
-            if (forced || !setInventoryKnown.count(inv))
-                vInventoryToSend.push_back(inv);
-
-        }
+        if (forced || !setInventoryKnown.count(inv))
+            vInventoryToSend.push_back(inv);
     }
 
     void PushBlockConfirmMessage(const CBlockConfirmMessage& msg) {
@@ -382,7 +363,7 @@ public:
     void PushBlockFinalityMessage(const CBlockFinalityMessage& msg) {
         LOCK(cs_blockFinality);
         if(!setBlockFinalityMsgKnown.count(msg)){
-            PushMessage(NetMsgType::FINALITYBLOCK, msg) ;
+            PushMessage(NetMsgType::FINALITYBLOCK, msg);
             setBlockFinalityMsgKnown.insert(msg);
         }
     }
@@ -600,9 +581,6 @@ public:
         }
     }
 
-    bool IsSubscribed(uint32_t nChannel);
-    void Subscribe(uint32_t nChannel, uint32_t nHops = 0);
-    void CancelSubscribe(uint32_t nChannel);
     void CloseSocketDisconnect();
     void Cleanup();
     void SocketSendData();
@@ -620,11 +598,9 @@ public:
     // dangerous, because it can cause a network split
     // between nodes running old code and nodes running
     // new code.
-    static void ClearBanned();  // needed for unit testing
     static bool IsBanned(CNetAddr ip);
     static bool Ban(const CNetAddr& ip);
-    void copyStats(CNodeStats& stats);
-
+    static void ClearBanned();  // needed for unit testing
     // Network stats
     static void RecordBytesRecv(uint64_t bytes);
     static void RecordBytesSent(uint64_t bytes);

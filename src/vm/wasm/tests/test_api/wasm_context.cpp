@@ -9,6 +9,22 @@ using namespace wasm;
 using std::chrono::microseconds;
 using std::chrono::system_clock;
 
+const signed char p_util_hexdigit[256] = {
+    -1,  -1,  -1,  -1, -1, -1,  -1,  -1,  -1,  -1,  -1,  -1, -1, -1, -1, -1, -1, -1,  -1,  -1,
+    -1,  -1,  -1,  -1, -1, -1,  -1,  -1,  -1,  -1,  -1,  -1, -1, -1, -1, -1, -1, -1,  -1,  -1,
+    -1,  -1,  -1,  -1, -1, -1,  -1,  -1,  0,   1,   2,   3,  4,  5,  6,  7,  8,  9,   -1,  -1,
+    -1,  -1,  -1,  -1, -1, 0xa, 0xb, 0xc, 0xd, 0xe, 0xf, -1, -1, -1, -1, -1, -1, -1,  -1,  -1,
+    -1,  -1,  -1,  -1, -1, -1,  -1,  -1,  -1,  -1,  -1,  -1, -1, -1, -1, -1, -1, 0xa, 0xb, 0xc,
+    0xd, 0xe, 0xf, -1, -1, -1,  -1,  -1,  -1,  -1,  -1,  -1, -1, -1, -1, -1, -1, -1,  -1,  -1,
+    -1,  -1,  -1,  -1, -1, -1,  -1,  -1,  -1,  -1,  -1,  -1, -1, -1, -1, -1, -1, -1,  -1,  -1,
+    -1,  -1,  -1,  -1, -1, -1,  -1,  -1,  -1,  -1,  -1,  -1, -1, -1, -1, -1, -1, -1,  -1,  -1,
+    -1,  -1,  -1,  -1, -1, -1,  -1,  -1,  -1,  -1,  -1,  -1, -1, -1, -1, -1, -1, -1,  -1,  -1,
+    -1,  -1,  -1,  -1, -1, -1,  -1,  -1,  -1,  -1,  -1,  -1, -1, -1, -1, -1, -1, -1,  -1,  -1,
+    -1,  -1,  -1,  -1, -1, -1,  -1,  -1,  -1,  -1,  -1,  -1, -1, -1, -1, -1, -1, -1,  -1,  -1,
+    -1,  -1,  -1,  -1, -1, -1,  -1,  -1,  -1,  -1,  -1,  -1, -1, -1, -1, -1, -1, -1,  -1,  -1,
+    -1,  -1,  -1,  -1, -1, -1,  -1,  -1,  -1,  -1,  -1,  -1, -1, -1, -1, -1,
+};
+
 namespace wasm {
     using nativeHandler = std::function<void(wasm_context & )>;
     map <pair<uint64_t, uint64_t>, nativeHandler>& get_wasm_native_handlers(){
@@ -29,13 +45,14 @@ namespace wasm {
         return nullptr;
     }
 
-    bool CWasmContractTx::ExecuteTx(wasm::transaction_trace &trx_trace, wasm::inline_transaction& trx){
+    bool CUniversalTx::ExecuteTx(wasm::transaction_trace &trx_trace, wasm::inline_transaction& trx){
         trx_trace.traces.emplace_back();
         execute_inline_transaction(trx_trace.traces.back(), trx, trx.contract, cache, state, 0);
         return true;
 
     };
-    void CWasmContractTx::execute_inline_transaction( wasm::inline_transaction_trace& trace,
+
+    void CUniversalTx::execute_inline_transaction( wasm::inline_transaction_trace& trace,
                                     wasm::inline_transaction& trx,
                                      uint64_t receiver,
                                      CCacheWrapper &cache,
@@ -70,13 +87,12 @@ namespace wasm {
         _pending_console_output.setf(std::ios::scientific, std::ios::floatfield);
     }
 
-
     void wasm_context::execute_inline( const inline_transaction& t ) {
         inline_transactions.push_back(t);
     }
 
-    std::vector <uint8_t> wasm_context::get_code(const uint64_t& account ) {
-       return cache.GetCode(account);
+    bool wasm_context::get_code(const uint64_t& contract, std::vector <uint8_t> &code) {
+       return cache.GetCode(contract, code);
     }
 
     void wasm_context::initialize() {
@@ -86,8 +102,8 @@ namespace wasm {
             wasm_interface_inited = true;
             wasmif.initialize(wasm::vm_type::eos_vm_jit);
         }
-        //RegisterNativeHandler(wasmio, N(setcode), WasmNativeSetcode);
-        //RegisterNativeHandler(wasmio_bank, N(transfer), WasmNativeTransfer);
+        //RegisterNativeHandler(wasmio, NAME(setcode), WasmNativeSetcode);
+        //RegisterNativeHandler(wasmio_bank, NAME(transfer), WasmNativeTransfer);
     }
 
     void wasm_context::execute( inline_transaction_trace &trace ) {
@@ -105,7 +121,7 @@ namespace wasm {
         }
 
         CHAIN_ASSERT( recurse_depth < wasm::max_inline_transaction_depth,
-                      transaction_exception, 
+                      transaction_exception,
                       "max inline transaction depth per transaction reached");
 
         for (auto &inline_trx : inline_transactions) {
@@ -124,8 +140,8 @@ namespace wasm {
         trace.receiver = _receiver;
 
         try {
-            vector <uint8_t> code = get_code(_receiver);
-            if (code.size() > 0)
+            vector <uint8_t> code;
+            if (get_code(_receiver, code) && code.size() > 0)
                 wasmif.execute(code, this);
         }
         CHAIN_RETHROW_EXCEPTIONS( wasm_exception, "pending console output: %s", _pending_console_output.str() )
@@ -147,7 +163,7 @@ namespace wasm {
         return false;
     }
 
-    void wasm_context::require_recipient( const uint64_t& recipient ) {
+    void wasm_context::notify_recipient( const uint64_t& recipient ) {
         if (!has_recipient(recipient)) {
             notified.push_back(recipient);
         }

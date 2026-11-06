@@ -34,9 +34,9 @@ public:
     uint64_t fuel_limit            = 0;
     TokenSymbol transfer_symbol;
     uint64_t transfer_amount       = 0;  // amount of tx user transfer to contract account
-    CAccount* p_tx_user_account    = nullptr;
-    CAccount* p_app_account        = nullptr;
-    CUniversalContract* p_contract = nullptr;
+    shared_ptr<CAccount> sp_tx_account    = nullptr;
+    shared_ptr<CAccount> sp_app_account        = nullptr;
+    CUniversalContractStore* p_contract = nullptr;
     string* p_arguments            = nullptr;
 };
 
@@ -111,9 +111,10 @@ public:
      * execute contract
      * @param pContextIn: run context
      * @param fuel: burned fuel amount
+     * @param errMsg: error msg
      * @return: nullptr if run success, else error string
      */
-    std::shared_ptr<string> ExecuteContract(CLuaVMContext *pContextIn, uint64_t& uRunStep);
+    bool ExecuteContract(CLuaVMContext *pContextIn, uint64_t& fuel, string &errMsg);
 
     /**
      * @brief just for test
@@ -121,12 +122,13 @@ public:
      */
     //	shared_ptr<vector<CVmOperate> > GetOperate() const;
     const CRegID& GetContractRegID();
-    const CRegID& GetTxUserRegid();
+    const CRegID& GetTxAccountRegId();
     uint64_t GetValue() const;
     const string& GetTxContract();
     CCacheWrapper* GetCw();
     CContractDBCache* GetScriptDB();
-    CAccountDBCache* GetCatchView();
+    CAccountDBCache* GetAccountCache();
+    shared_ptr<CAccount> GetAccount(const CUserID &uid);
     int32_t GetConfirmHeight();
     // Get burn version for fuel burning
     int32_t GetBurnVersion();

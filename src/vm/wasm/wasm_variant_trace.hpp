@@ -6,30 +6,31 @@
 #include "wasm/abi_def.hpp"
 #include "wasm/wasm_constants.hpp"
 #include "wasm/abi_serializer.hpp"
-#include "wasm/wasm_native_contract_abi.hpp"
-#include "wasm/wasm_native_contract.hpp"
+//#include "wasm/wasm_native_contract_abi.hpp"
+//#include "wasm/wasm_native_contract.hpp"
 #include "wasm_trace.hpp"
-#include "tx/wasmcontracttx.h"
+#include "tx/contracttx.h"
+#include "wasm/modules/wasm_native_dispatch.hpp"
 
 namespace wasm {
+
+
 
 template<typename Api>
 struct resolver_factory {
 static auto make(Api& api) {
-    return [api](const uint64_t &account) -> std::vector<char> {
+    return [&api](const uint64_t &account) -> std::vector<char> {
 
         std::vector<char> abi;
         if (!get_native_contract_abi(account, abi)) {
-            CUniversalContract contract_store;
-            CAccount           contract_account;
-            if (api->accountCache.GetAccount(CNickID(wasm::name(account).to_string()), contract_account)
-                && api->contractCache.GetContract(contract_account.regid, contract_store)){
+            CUniversalContractStore contract_store;
+            if (api.contractCache.GetContract(CRegID(account), contract_store)){
                 abi.insert(abi.end(), contract_store.abi.begin(), contract_store.abi.end());
             }
         }
         return abi;
     };
-  } 
+  }
 };
 
 template<typename Api>
@@ -42,7 +43,7 @@ static inline void to_variant(const signature_pair &t, json_spirit::Value &v) {
     json_spirit::Object obj;
 
     json_spirit::Value val;
-    to_variant(wasm::name(t.account), val);
+    to_variant(wasm::regid(t.account), val);
     json_spirit::Config::add(obj, "account", val);
 
     to_variant(HexStr(t.signature), val);
@@ -56,7 +57,7 @@ static inline void to_variant(const wasm::permission &t, json_spirit::Value &v) 
     json_spirit::Object obj;
 
     json_spirit::Value val;
-    to_variant(wasm::name(t.account), val);
+    to_variant(wasm::regid(t.account), val);
     json_spirit::Config::add(obj, "account", val);
 
     to_variant(wasm::name(t.perm), val);
@@ -70,7 +71,7 @@ static inline void to_variant(const wasm::inline_transaction &t, json_spirit::Va
     json_spirit::Object obj;
 
     json_spirit::Value val;
-    to_variant(wasm::name(t.contract), val);
+    to_variant(wasm::regid(t.contract), val);
     json_spirit::Config::add(obj, "contract", val);
 
     to_variant(wasm::name(t.action), val);
@@ -83,7 +84,7 @@ static inline void to_variant(const wasm::inline_transaction &t, json_spirit::Va
         arr.push_back(tmp);
     }
     json_spirit::Config::add(obj, "authorization", json_spirit::Value(arr));
-    to_variant(ToHex(t.data, ""), val);
+    to_variant(to_hex(t.data, ""), val);
     json_spirit::Config::add(obj, "data", val);
 
     v = obj;
@@ -96,7 +97,7 @@ static inline void to_variant(const wasm::inline_transaction &t, json_spirit::Va
     json_spirit::Object obj;
 
     json_spirit::Value val;
-    to_variant(wasm::name(t.contract), val);
+    to_variant(wasm::regid(t.contract), val);
     json_spirit::Config::add(obj, "contract", val);
 
     to_variant(wasm::name(t.action), val);
@@ -112,18 +113,18 @@ static inline void to_variant(const wasm::inline_transaction &t, json_spirit::Va
 
     std::vector<char> abi = resolver(t.contract);
 
-    if (abi.size() > 0 && t.action != wasm::N(setcode)) {
-    //if (abi.size() > 0 ) {
+    //fixme:setcode should be removed
+    if (abi.size() > 0 && t.action != wasm::NAME(setcode)) {
         if (t.data.size() > 0) {
             try {
                 val = wasm::abi_serializer::unpack(abi, wasm::name(t.action).to_string(), t.data,
                                                    max_serialization_time);
             } catch (...) {
-                to_variant(ToHex(t.data, ""), val);
+                to_variant(to_hex(t.data, ""), val);
             }
         }
     } else
-        to_variant(ToHex(t.data, ""), val);
+        to_variant(to_hex(t.data, ""), val);
 
     json_spirit::Config::add(obj, "data", val);
 
@@ -141,7 +142,7 @@ static inline void to_variant(const wasm::inline_transaction_trace &t, json_spir
     // to_variant(t.elapsed.count(), val);
     // json_spirit::Config::add(obj, "elapsed", val);
 
-    to_variant(wasm::name(t.receiver), val);
+    to_variant(wasm::regid(t.receiver), val);
     json_spirit::Config::add(obj, "receiver", val);
 
     to_variant(t.trx, val, resolver);
@@ -168,23 +169,24 @@ static inline void to_variant(const wasm::inline_transaction_trace &t, json_spir
 
 }
 
+
+template<typename Variant, typename Resolver>
+static inline void add_field_variant(json_spirit::Object &obj, const string& name, const Variant &var, Resolver resolver) {
+    json_spirit::Value value;
+    to_variant(var, value);
+    json_spirit::Config::add(obj, name, value);
+}
+
 template<typename Resolver>
 static inline void to_variant(const wasm::transaction_trace &t, json_spirit::Value &v, Resolver resolver) {
 
     json_spirit::Object obj;
 
-    json_spirit::Value val;
-    to_variant(t.trx_id.ToString(), val);
-    json_spirit::Config::add(obj, "trx_id", val);
-
-    to_variant(t.elapsed.count(), val);
-    json_spirit::Config::add(obj, "elapsed", val);
-
-    to_variant(t.fuel_rate, val);
-    json_spirit::Config::add(obj, "fuel_rate", val);
-
-    to_variant(t.run_cost, val);
-    json_spirit::Config::add(obj, "run_cost", val);
+    add_field_variant(obj, "trx_id", t.trx_id.ToString(), resolver);
+    add_field_variant(obj, "elapsed", t.elapsed.count(), resolver);
+    add_field_variant(obj, "burned_fuel", t.fuel, resolver);
+    add_field_variant(obj, "fuel_rate", t.fuel_rate, resolver);
+    add_field_variant(obj, "minimum_fee", t.minimum_tx_execute_fee, resolver);
 
     if (t.traces.size() > 0) {
         json_spirit::Array arr;
@@ -202,5 +204,3 @@ static inline void to_variant(const wasm::transaction_trace &t, json_spirit::Val
 
 
 } //wasm
-
-

@@ -6,11 +6,14 @@
 #ifndef TX_CONTRACT_H
 #define TX_CONTRACT_H
 
-#include "tx.h"
 #include "entities/contract.h"
+#include "tx.h"
 
-
-/**#################### LuaVM Contract Deploy & Invoke Class Definitions ##############################**/
+/**
+ * @@Deprecated after R1
+ *
+ *  replaced by CUniversalTx
+ */
 class CLuaContractDeployTx : public CBaseTx {
 public:
     CLuaContract contract;  // contract script content
@@ -37,9 +40,9 @@ public:
     }
 
     virtual std::shared_ptr<CBaseTx> GetNewInstance() const { return std::make_shared<CLuaContractDeployTx>(*this); }
-    virtual uint64_t GetFuel(int32_t height, uint32_t fuelRate);
+    virtual uint64_t GetFuelFee(CCacheWrapper &cw, int32_t height, uint32_t fuelRate);
     virtual string ToString(CAccountDBCache &accountView);
-    virtual Object ToJson(const CAccountDBCache &accountView) const;
+    virtual Object ToJson(CCacheWrapper &cw) const;
 
     virtual bool CheckTx(CTxExecuteContext &context);
     virtual bool ExecuteTx(CTxExecuteContext &context);
@@ -74,13 +77,17 @@ public:
 
     virtual std::shared_ptr<CBaseTx> GetNewInstance() const { return std::make_shared<CLuaContractInvokeTx>(*this); }
     virtual string ToString(CAccountDBCache &accountView);
-    virtual Object ToJson(const CAccountDBCache &accountView) const;
+    virtual Object ToJson(CCacheWrapper &cw) const;
 
     virtual bool CheckTx(CTxExecuteContext &context);
     virtual bool ExecuteTx(CTxExecuteContext &context);
 };
 
-/**#################### Universal Contract Deploy & Invoke Class Definitions ##############################**/
+/**
+ * @@Deprecated after R2
+ *
+ *  replaced by CUniversalTx
+ */
 class CUniversalContractDeployTx : public CBaseTx {
 public:
     CUniversalContract contract;  // contract script content
@@ -108,14 +115,13 @@ public:
     }
 
     virtual std::shared_ptr<CBaseTx> GetNewInstance() const { return std::make_shared<CUniversalContractDeployTx>(*this); }
-    virtual uint64_t GetFuel(int32_t height, uint32_t fuelRate);
+    virtual uint64_t GetFuelFee(CCacheWrapper &cw, int32_t height, uint32_t fuelRate);
     virtual string ToString(CAccountDBCache &accountView);
-    virtual Object ToJson(const CAccountDBCache &accountView) const;
+    virtual Object ToJson(CCacheWrapper &cw) const;
 
     virtual bool CheckTx(CTxExecuteContext &context);
     virtual bool ExecuteTx(CTxExecuteContext &context);
 };
-
 class CUniversalContractInvokeTx : public CBaseTx {
 public:
     mutable CUserID app_uid;  // app regid
@@ -150,7 +156,7 @@ public:
 
     virtual std::shared_ptr<CBaseTx> GetNewInstance() const { return std::make_shared<CUniversalContractInvokeTx>(*this); }
     virtual string ToString(CAccountDBCache &accountView);
-    virtual Object ToJson(const CAccountDBCache &accountView) const;
+    virtual Object ToJson(CCacheWrapper &cw) const;
 
     virtual bool CheckTx(CTxExecuteContext &context);
     virtual bool ExecuteTx(CTxExecuteContext &context);

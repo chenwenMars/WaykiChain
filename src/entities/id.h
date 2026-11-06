@@ -24,9 +24,8 @@ class CRegID;
 
 enum AccountIDType {
     NULL_ID = 0,
-    NICK_ID = 1,
-    REG_ID  = 2,
-    ADDRESS = 3,
+    REG_ID  = 1,
+    ADDRESS = 2,
 };
 
 typedef vector<uint8_t> UnsignedCharArray;
@@ -45,16 +44,27 @@ class CRegIDKey;
 
 class CRegID {
 public:
-    CRegID(const string &strRegID);
-    CRegID(const vector<uint8_t> &vIn);
+    /**
+     * constructor by regid string, such as: 10-1
+     */
+    CRegID(const string &regidStr);
+    /**
+     * constructor by raw data (data in memory format)
+     */
+    CRegID(const vector<uint8_t> &rawDataIn);
     CRegID(const uint32_t height = 0, const uint16_t index = 0);
+    CRegID(const uint64_t& regIdIntValue);
 
-    const vector<uint8_t> &GetRegIdRaw() const;
 
-    void SetRegID(const vector<uint8_t> &vIn);
+    bool SetRegID(const string &regidStr);
+    bool SetRegID(const vector<uint8_t> &rawDataIn);
+    void Set(uint64_t regIdIntValue);
+    vector<uint8_t> GetRegIdRaw() const;
+
     CKeyID GetKeyId(const CAccountDBCache &accountCache) const;
     uint32_t GetHeight() const { return height; }
     uint16_t GetIndex() const { return index; }
+    uint64_t GetIntValue() const { return (((uint64_t)height) << 20) + index; }
 
     bool IsMature(uint32_t curHeight) const;
 
@@ -73,25 +83,20 @@ public:
     static bool GetKeyId(const string &str, CKeyID &keyId);
     inline constexpr bool IsEmpty() const { return (height == 0 && index == 0); }
     void SetEmpty() { Clear(); }
-    bool Clear();
+
+    void Clear();
+
     string ToString() const;
 
     IMPLEMENT_SERIALIZE(
         READWRITE(VARINT(height));
         READWRITE(VARINT(index));
-        if (fRead) {
-            vRegID.clear();
-            vRegID.insert(vRegID.end(), BEGIN(height), END(height));
-            vRegID.insert(vRegID.end(), BEGIN(index), END(index));
-        }
     )
 private:
-    uint32_t height;
-    uint16_t index;
-    mutable vector<uint8_t> vRegID;
+    uint32_t height = 0;
+    uint16_t index = 0;
 
-    void SetRegID(string strRegID);
-    void SetRegIDByCompact(const vector<uint8_t> &vIn);
+    static const uint32_t RAW_SIZE = sizeof(height) + sizeof(index);
 
     friend CUserID;
     friend class CRegIDKey;
@@ -112,6 +117,7 @@ public:
 
     inline bool IsEmpty() const { return regid.IsEmpty(); }
     void SetEmpty() { regid.SetEmpty(); }
+    string ToString() const { return regid.ToString(); }
 
 
     bool operator==(const CRegIDKey &other) const { return this->regid == other.regid; }
@@ -119,34 +125,10 @@ public:
     bool operator<(const CRegIDKey &other) const { return this->regid < other.regid; }
 };
 
-class CNickID {
-public:
-    uint64_t value = 0 ;
-
-    CNickID();
-
-    CNickID(uint64_t nickIdIn);
-
-    CNickID(string nickIdIn);
-
-    bool IsMature(const uint32_t currHeight) const ;
-    bool IsEmpty() const;
-    void SetEmpty();
-    void Clear();
-    string ToString() const;
-
-    IMPLEMENT_SERIALIZE(READWRITE(VARINT(value));)
-
-    // Comparator implementation.
-    friend bool operator==(const CNickID &a, const CNickID &b) { return a.value == b.value; }
-    friend bool operator!=(const CNickID &a, const CNickID &b) { return a.value != b.value; }
-    friend bool operator<(const CNickID &a, const CNickID &b) { return a.value < b.value; }
-};
-
 class CUserID {
 private:
-    std::variant<CNullID, CRegID, CKeyID, CPubKey, CNickID> uid;
-    enum VarIndex: size_t {IDX_NULL_ID, IDX_REG_ID, IDX_KEY_ID, IDX_PUB_KEY_ID, IDX_NICK_ID};
+    std::variant<CNullID, CRegID, CKeyID, CPubKey> uid;
+    enum VarIndex: size_t { IDX_NULL_ID, IDX_REG_ID, IDX_KEY_ID, IDX_PUB_KEY_ID };
 
 public:
     enum SerializeFlag {
@@ -155,7 +137,6 @@ public:
         FlagRegIDMax    = 10,
         FlagKeyID       = 20,
         FlagPubKey      = 33,  // public key
-        FlagNickID      = 100
     };
 
 public:
@@ -178,12 +159,24 @@ public:
 
     template <typename ID>
     ID& get() {
-        return std::get<ID>(uid);
+        try {
+            return std::get<ID>(uid);
+        } catch (std::exception &e) {
+            ERRORMSG("CUserID::get(%s) exception=%s", typeid(ID).name(), e.what());
+            throw runtime_error(strprintf("CUserID::get(%s) exception=%s",
+                                          typeid(ID).name(), e.what()));
+        }
     }
 
     template <typename ID>
     const ID& get() const {
-        return std::get<ID>(uid);
+        try {
+            return std::get<ID>(uid);
+        } catch (std::exception &e) {
+            ERRORMSG("CUserID::get(%s) exception=%s", typeid(ID).name(), e.what());
+            throw runtime_error(strprintf("CUserID::get(%s) exception=%s",
+                                          typeid(ID).name(), e.what()));
+        }
     }
 
     template <typename ID>
@@ -256,8 +249,6 @@ public:
                 // If the public key is empty, length of serialized data is 1, otherwise, 34.
                 assert(sz == sizeof(uint8_t) + FlagPubKey);
                 return sz;
-            } else if constexpr (std::is_same_v<ID, CNickID>) {
-                return sizeof(uint8_t) + idIn.GetSerializeSize(nType, nVersion);
             } else {  // CNullID
                 assert( (std::is_same_v<ID, CNullID>) );
                 return sizeof(uint8_t);
@@ -280,8 +271,6 @@ public:
                 // If the public key is empty, length of serialized data is 1, otherwise, 34.
                 assert(idIn.GetSerializeSize(nType, nVersion) == sizeof(uint8_t) + FlagPubKey);
                 s << idIn;
-            } else if constexpr (std::is_same_v<ID, CNickID>) {
-                s << (uint8_t)FlagNickID << idIn;
             } else {  // CNullID
                 assert( (std::is_same_v<ID, CNullID>) );
                 s << (uint8_t)0;
@@ -294,34 +283,29 @@ public:
         bool invalidId         = false;
         SerializeFlag typeFlag = (SerializeFlag)ReadCompactSize(s);
 
-        if (typeFlag == FlagNickID) {  // idType >= 100
-            CNickID nickId;
-            s >> nickId;
-            uid = nickId;
-        } else {  // typeFlag is the length of id content
-            int len = typeFlag;
-            if (FlagRegIDMin <= len && len <= FlagRegIDMax) {
-                CRegID regId(0, 0);
-                s >> regId;
-                uid = regId;
-            } else if (len == FlagKeyID) {
-                UnsignedCharArray vchData;
-                vchData.resize(len);
-                s.read((char *)&vchData[0], len * sizeof(vchData[0]));
-                uint160 data = uint160(vchData);
-                CKeyID keyId(data);
-                uid = keyId;
-            } else if (len == FlagPubKey) {  // public key
-                UnsignedCharArray vchData;
-                vchData.resize(len);
-                s.read((char *)&vchData[0], len * sizeof(vchData[0]));
-                CPubKey pubKey(vchData);
-                uid = pubKey;
-            } else if (len == FlagNullType) {  // null id type
-                uid = CNullID();
-            } else {
-                invalidId = true;
-            }
+       // typeFlag is the length of id content
+        int len = typeFlag;
+        if (FlagRegIDMin <= len && len <= FlagRegIDMax) {
+            CRegID regId(0, 0);
+            s >> regId;
+            uid = regId;
+        } else if (len == FlagKeyID) {
+            UnsignedCharArray vchData;
+            vchData.resize(len);
+            s.read((char *)&vchData[0], len * sizeof(vchData[0]));
+            uint160 data = uint160(vchData);
+            CKeyID keyId(data);
+            uid = keyId;
+        } else if (len == FlagPubKey) {  // public key
+            UnsignedCharArray vchData;
+            vchData.resize(len);
+            s.read((char *)&vchData[0], len * sizeof(vchData[0]));
+            CPubKey pubKey(vchData);
+            uid = pubKey;
+        } else if (len == FlagNullType) {  // null id type
+            uid = CNullID();
+        } else {
+            invalidId = true;
         }
 
         if (invalidId) {
@@ -330,5 +314,4 @@ public:
         }
     }
 };
-
 #endif //ENTITIES_ID_H

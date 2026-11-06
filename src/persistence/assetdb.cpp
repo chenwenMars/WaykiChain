@@ -12,46 +12,100 @@
 
 using namespace std;
 
-bool CAssetDBCache::GetAsset(const TokenSymbol &tokenSymbol, CAsset &asset) {
-    return assetCache.GetData(tokenSymbol, asset);
+bool CAssetDbCache::GetAsset(const TokenSymbol &tokenSymbol, CAsset &asset) {
+    return asset_cache.GetData(tokenSymbol, asset);
 }
 
-bool CAssetDBCache::HaveAsset(const TokenSymbol &tokenSymbol) {
-    return assetCache.HaveData(tokenSymbol);
+bool CAssetDbCache::SetAsset(const CAsset &asset) {
+    return asset_cache.SetData(asset.asset_symbol, asset);
 }
 
-bool CAssetDBCache::SaveAsset(const CAsset &asset) {
-    return assetCache.SetData(asset.symbol, asset);
-}
-bool CAssetDBCache::ExistAssetSymbol(const TokenSymbol &tokenSymbol) {
-    return assetCache.HaveData(tokenSymbol);
+bool CAssetDbCache::HasAsset(const TokenSymbol &tokenSymbol) {
+    return asset_cache.HasData(tokenSymbol);
 }
 
-shared_ptr<string> CAssetDBCache::CheckTransferCoinSymbol(const TokenSymbol &symbol) {
-    size_t coinSymbolSize = symbol.size();
-    if (coinSymbolSize == 0 || coinSymbolSize > MAX_TOKEN_SYMBOL_LEN) {
-        return make_shared<string>("empty or too long");
+bool CAssetDbCache::CheckAsset(const TokenSymbol &symbol, CAsset &asset) {
+    if (symbol.size() < MIN_TOKEN_SYMBOL_LEN || symbol.size() > MAX_TOKEN_SYMBOL_LEN) {
+        LogPrint(BCLog::INFO, "[WARN] Invalid symobl format: %s\n", symbol);
+        return false;
     }
 
-    if ((coinSymbolSize < MIN_ASSET_SYMBOL_LEN && !kCoinTypeSet.count(symbol)) ||
-        (coinSymbolSize >= MIN_ASSET_SYMBOL_LEN && !HaveAsset(symbol)))
-        return make_shared<string>("unsupported symbol");
+    if (!GetAsset(symbol, asset)) {
+        LogPrint(BCLog::INFO, "[WARN] Asset(%s) does not exist\n", symbol);
+        return false;
+    }
 
-    return nullptr;
-}
-
-bool CAssetDBCache::AddAssetTradingPair(const CAssetTradingPair &assetTradingPair) {
-    return assetTradingPairCache.SetData(assetTradingPair, 1);
-}
-bool CAssetDBCache::EraseAssetTradingPair(const CAssetTradingPair &assetTradingPair) {
-    return assetTradingPairCache.EraseData(assetTradingPair);
-}
-bool CAssetDBCache::ExistAssetTradingPair(const CAssetTradingPair &assetTradingPair) {
-    return assetTradingPairCache.HaveData(assetTradingPair);
-}
-
-bool CAssetDBCache::Flush() {
-    assetCache.Flush();
-    assetTradingPairCache.Flush();
     return true;
+}
+
+bool CAssetDbCache::CheckAsset(const TokenSymbol &symbol, const uint64_t permsSum) {
+    CAsset asset;
+    if (!CheckAsset(symbol, asset))
+        return false;
+
+    if (permsSum == 0)
+        return true;
+
+    LogPrint(BCLog::DEBUG, "Asset(%s) to check perms: %llu vs actual %llu\n", symbol, permsSum, asset.perms_sum);
+
+    return asset.HasPerms(permsSum);
+}
+
+bool CAssetDbCache::GetAssetTokensByPerm(const AssetPermType& permType, set<TokenSymbol> &symbolSet) {
+
+    CDbIterator<DbAssetCache> it(asset_cache);
+   // CPermAssetsIterator it(perm_assets_cache, CFixedUInt64(permType));
+    for (it.First(); it.IsValid(); it.Next()) {
+        if (it.GetValue().HasPerms(permType))
+            symbolSet.insert(it.GetKey());
+    }
+
+    return true;
+}
+
+bool CAssetDbCache::CheckPriceFeedQuoteSymbol(const TokenSymbol &quoteSymbol) {
+    if (kPriceQuoteSymbolSet.count(quoteSymbol) == 0)
+        return ERRORMSG("unsupported price quote_symbol=%s", quoteSymbol);
+
+    return true;
+}
+
+bool CAssetDbCache::CheckDexBaseSymbol(const TokenSymbol &baseSymbol) {
+    CAsset baseAsset;
+    if (!GetAsset(baseSymbol, baseAsset))
+        return ERRORMSG("dex base_symbol=%s not exist", baseSymbol);
+
+    if (!baseAsset.HasPerms(AssetPermType::PERM_DEX_BASE))
+        return ERRORMSG("dex base_symbol=%s has no PERM_DEX_BASE", baseSymbol);
+
+    return true;
+}
+
+bool CAssetDbCache::CheckDexQuoteSymbol(const TokenSymbol &quoteSymbol) {
+
+    CAsset quoteAsset;
+    if (!GetAsset(quoteSymbol, quoteAsset))
+        return ERRORMSG("dex quote_symbol=%s not exist", quoteSymbol);
+
+    if (!quoteAsset.HasPerms(AssetPermType::PERM_DEX_QUOTE))
+        return ERRORMSG("dex quote_symbol=%s not have PERM_DEX_BASE", quoteSymbol);
+
+    return true;
+}
+
+bool CAssetDbCache::SetAxcSwapPair(const CAxcSwapPairStore &value) {
+    return axc_swap_coin_ps_cache.SetData(value.peer_symbol, value) &&
+           axc_swap_coin_sp_cache.SetData(value.GetSelfSymbol(), value);
+}
+
+bool CAssetDbCache::HasAxcCoinPairByPeerSymbol(TokenSymbol peerSymbol) {
+    return axc_swap_coin_ps_cache.HasData(peerSymbol);
+}
+
+bool CAssetDbCache::GetAxcCoinPairBySelfSymbol(TokenSymbol selfSymbol, CAxcSwapPairStore& swapPair) {
+    return axc_swap_coin_sp_cache.GetData(selfSymbol, swapPair);
+}
+
+bool CAssetDbCache::GetAxcCoinPairByPeerSymbol(TokenSymbol peerSymbol, CAxcSwapPairStore& swapPair) {
+    return axc_swap_coin_ps_cache.GetData(peerSymbol, swapPair);
 }

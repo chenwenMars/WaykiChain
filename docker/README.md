@@ -1,6 +1,8 @@
 # Version
-* 2019-09-10
-* v2.0.0
+* v3.0.0
+
+# Mainnet Upgrade Date
+* 2020-07-16
 
 # Run in docker
 Run waykichain coind inside a docker container!
@@ -25,10 +27,10 @@ Run waykichain coind inside a docker container!
    * For testnet: ``` sudo mkdir -p /opt/docker-instances/waykicoind-test ```
 1. first, cd into the above created node host dir and create ```data``` and ```conf``` subdirs:
    * ``` sudo mkdir data conf ```
-1. copy the entire Docker/bin dir from WaykiChain repository:
-   * ``` sudo cp -r ${your_path_of_WaykiChain}/Docker/bin ./ ```
+1. copy the entire docker/bin dir from WaykiChain repository:
+   * ``` sudo cp -r ${your_path_of_WaykiChain}/docker/bin ./ ```
 1. copy WaykiCoind.conf into ```conf``` dir from WaykiChain repository:
-   * ``` sudo cp -r ${your_path_of_WaykiChain}/Docker/WaykiChain.conf ./conf/ ```
+   * ``` sudo cp -r ${your_path_of_WaykiChain}/docker/WaykiChain.conf ./conf/ ```
 1. modify content of ```WaykiCoind.conf``` accordingly
    * For mainnet, please make sure ```nettype=main``` is set
    * For testnet, please make sure only ```nettype=test``` is set

@@ -300,7 +300,7 @@ static void http_reject_request_cb(struct evhttp_request* req, void*) {
 
 /** Event dispatcher thread */
 static bool ThreadHTTP(struct event_base* base) {
-    RenameThread("bitcoin-http");
+    RenameThread("coin-http");
     LogPrint(BCLog::RPC, "Entering http event loop\n");
     event_base_dispatch(base);
     // Event loop will be interrupted by InterruptHTTPServer()
@@ -352,7 +352,7 @@ static bool HTTPBindAddresses(struct evhttp* http) {
 
 /** Simple wrapper to set thread name and run work queue */
 static void HTTPWorkQueueRun(WorkQueue<HTTPClosure>* queue) {
-    RenameThread("bitcoin-httpworker");
+    RenameThread("coin-httpworker");
     queue->Run();
 }
 
@@ -420,6 +420,12 @@ bool InitHTTPServer() {
     eventBase = base_ctr.release();
     eventHTTP = http_ctr.release();
     return true;
+}
+
+void FinalizeHTTPServer() {
+#if LIBEVENT_VERSION_NUMBER >= 0x02010100
+    libevent_global_shutdown();
+#endif
 }
 
 bool UpdateHTTPServerLogging(bool enable) {
@@ -524,7 +530,7 @@ HTTPRequest::HTTPRequest(struct evhttp_request* _req) : req(_req), replySent(fal
 HTTPRequest::~HTTPRequest() {
     if (!replySent) {
         // Keep track of whether reply was sent to avoid request leaks
-        LogPrint(BCLog::ERROR, "%s: Unhandled request\n", __func__);
+        LogPrint(BCLog::ERROR, "Unhandled request\n");
         WriteReply(HTTP_INTERNAL, "Unhandled request");
     }
     // evhttpd cleans up the request, as long as a reply was sent.

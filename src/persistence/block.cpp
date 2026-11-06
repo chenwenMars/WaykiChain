@@ -20,7 +20,7 @@ void CBlockHeader::SetHeight(uint32_t  height) {
 
 uint256 CBlockHeader::ComputeSignatureHash() const {
     CHashWriter ss(SER_GETHASH, CLIENT_VERSION);
-    ss << nVersion << prevBlockHash << merkleRootHash << nTime << nNonce << height << nFuel << nFuelRate;
+    ss << nVersion << prevBlockHash << merkleRootHash << nTime << nNonce << height << nFuelFee << nFuelRate;
     return ss.GetHash();
 }
 
@@ -79,28 +79,28 @@ map<TokenSymbol, uint64_t> CBlock::GetFees() const {
     return fees;
 }
 
-PriceMap CBlock::GetBlockMedianPrice() const {
+const PriceMap& CBlock::GetBlockMedianPrice() const {
     if (GetFeatureForkVersion(GetHeight()) == MAJOR_VER_R1) {
-        return PriceMap();
+        return EMPTY_PRICE_MAP;
     }
 
     for (size_t index = 1; index < vptx.size(); ++ index) {
-        if (vptx[index]->IsPriceFeedTx()) {
+        if (vptx[index]->IsPriceFeedTx())
             continue;
-        } else if (vptx[index]->IsPriceMedianTx()) {
-            return ((CBlockPriceMedianTx*)vptx[index].get())->median_prices;
-        } else {
-            break;
-        }
+
+        if (vptx[index]->IsPriceMedianTx())
+            return ((CBlockPriceMedianTx*) vptx[index].get())->median_prices;
+
+        break;
     }
 
     LogPrint(BCLog::ERROR, "GetBlockMedianPrice() : failed to acquire median price, height: %u, hash: %s\n", GetHeight(),
              GetHash().GetHex());
-    assert(false && "block does not have price median tx");
-    return PriceMap();
+    //assert(false && "block has NO price median tx");
+    return EMPTY_PRICE_MAP;
 }
 
-CUserID CBlock::GetMinerUserID() const {
+const CUserID& CBlock::GetMinerUserID() const {
     assert(vptx.size() > 0);
     assert(vptx[0]->IsBlockRewardTx());
 
@@ -109,14 +109,15 @@ CUserID CBlock::GetMinerUserID() const {
 
 void CBlock::Print() const {
     string medianPrices;
-    for (const auto &item : GetBlockMedianPrice()) {
+    const auto& priceMap = GetBlockMedianPrice();
+    for (const auto &item : priceMap) {
         medianPrices += strprintf("{%s/%s -> %llu}", std::get<0>(item.first), std::get<1>(item.first), item.second);
     }
 
-    LogPrint(BCLog::DEBUG, "block height=%d, hash=%s, ver=%d, hashPrevBlock=%s, merkleRootHash=%s, nTime=%u, nNonce=%u, vtx=%u, nFuel=%d, "
+    LogPrint(BCLog::DEBUG, "[%d] hash=%s, ver=%d, hashPrevBlock=%s, merkleRootHash=%s, nTime=%u, nNonce=%u, vtx=%u, nFuelFee=%d, "
              "nFuelRate=%d, median prices: %s\n",
              height, GetHash().ToString(), nVersion, prevBlockHash.ToString(), merkleRootHash.ToString(), nTime, nNonce,
-             vptx.size(), nFuel, nFuelRate, medianPrices);
+             vptx.size(), nFuelFee, nFuelRate, medianPrices);
 }
 
 std::tuple<bool, int> CBlock::GetTxIndex(const uint256& txid) const {
@@ -169,7 +170,7 @@ bool ReadBlockFromDisk(const CDiskBlockPos &pos, CBlock &block) {
     try {
         filein >> block;
     } catch (std::exception &e) {
-        return ERRORMSG("%s : Deserialize or I/O error - %s", __func__, e.what());
+        return ERRORMSG("Deserialize or I/O error - %s", e.what());
     }
 
     return true;
@@ -198,5 +199,15 @@ bool ReadBaseTxFromDisk(const CTxCord txCord, std::shared_ptr<CBaseTx> &pTx) {
         return ERRORMSG("ReadBaseTxFromDisk error, the tx(%s) index exceed the tx count of block", txCord.ToString());
     }
     pTx = pBlock->vptx.at(txCord.GetIndex())->GetNewInstance();
+    return true;
+}
+
+bool GetBlockHeader(CBlockIndex *pBlockIndex, CBlockHeader &header) {
+    // TODO: need to use map pool of block header?
+    CDiskBlockIndex diskBlockIndex;
+    if (!pCdMan->pBlockIndexDb->GetBlockIndex(pBlockIndex->GetBlockHash(), diskBlockIndex)) {
+        return ERRORMSG("the index of block=%s not found in db", pBlockIndex->GetIdString());
+    }
+    diskBlockIndex.GetBlockHeader(header);
     return true;
 }

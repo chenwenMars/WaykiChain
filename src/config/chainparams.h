@@ -11,11 +11,12 @@
 #include <boost/filesystem/fstream.hpp>
 #include <vector>
 
-#include "entities/id.h"
+#include "commons/json/json_spirit_value.h"
 #include "commons/uint256.h"
 #include "commons/arith_uint256.h"
 #include "commons/util/util.h"
 #include "config/scoin.h"
+#include "entities/id.h"
 
 using namespace std;
 
@@ -40,6 +41,8 @@ typedef enum {
 
 static const string NetTypeNames[] = { "MAIN_NET", "TEST_NET", "REGTEST_NET" };
 
+static const CRegID GENESIS_REGID = CRegID (0, 1);
+
 typedef enum {
     PUBKEY_ADDRESS,     //!< PUBKEY_ADDRESS
     SCRIPT_ADDRESS,     //!< SCRIPT_ADDRESS
@@ -61,10 +64,12 @@ class CBaseParams {
 protected:
     mutable bool fDebug;
     mutable bool fServer;
+    mutable bool fDisplayValueInSawi;
     mutable bool fImporting;
     mutable bool fReindex;
     mutable bool fBenchmark;
     mutable bool fTxIndex;
+    mutable bool fTxTrace;
     mutable bool fLogFailures;
     mutable bool fGenReceipt;
     mutable int64_t nTimeBestReceived;
@@ -74,14 +79,6 @@ protected:
 
 public:
     virtual ~CBaseParams() {}
-
-    virtual bool InitializeConfig() {
-        fServer = GetBoolArg("-rpcserver", false);
-        fDebug = !m_mapMultiArgs["-debug"].empty();
-        nMaxForkTime = GetArg("-maxforktime", 24 * 60 * 60);
-
-        return true;
-    }
 
     virtual string ToString() const {
         string te = "";
@@ -100,10 +97,11 @@ public:
         te += strprintf("fReindex:%d\n",                            fReindex);
         te += strprintf("fBenchmark:%d\n",                          fBenchmark);
         te += strprintf("fTxIndex:%d\n",                            fTxIndex);
+        te += strprintf("fTxTrace:%d\n",                            fTxTrace);
         te += strprintf("fLogFailures:%d\n",                        fLogFailures);
         te += strprintf("nTimeBestReceived:%llu\n",                 nTimeBestReceived);
-        te += strprintf("nBlockIntervalPreStableCoinRelease:%u\n",  nBlockIntervalPreStableCoinRelease);
-        te += strprintf("nBlockIntervalStableCoinRelease:%u\n",     nBlockIntervalStableCoinRelease);
+        te += strprintf("nBlockIntervalPreVer2Fork:%u\n",  nBlockIntervalPreVer2Fork);
+        te += strprintf("nBlockIntervalPostVer2Fork:%u\n",     nBlockIntervalPostVer2Fork);
         te += strprintf("nCacheSize:%u\n",                          nCacheSize);
         te += strprintf("nTxCacheHeight:%u\n",                      nTxCacheHeight);
         te += strprintf("nMaxForkTime:%d\n",                        nMaxForkTime);
@@ -147,12 +145,22 @@ public:
         }
         return nConnectTimeout;
     }
+
+    void InitConfig(bool fServerIn, bool fDebugIn, bool fDisplayValueInSawiIn, int64_t maxForkTimeIn) {
+        fServer         = fServerIn;
+        fDebug          = fDebugIn;
+        nMaxForkTime    = maxForkTimeIn;
+        fDisplayValueInSawi = fDisplayValueInSawiIn;
+    }
+
     bool IsDebug() const { return fDebug; }
     bool IsServer() const { return fServer; }
+    bool IsDisplayValueInSawi() const { return fDisplayValueInSawi; }
     bool IsImporting() const { return fImporting; }
     bool IsReindex() const { return fReindex; }
     bool IsBenchmark() const { return fBenchmark; }
     bool IsTxIndex() const { return fTxIndex; }
+    bool IsTxTrace() const { return fTxTrace; }
     bool IsLogFailures() const { return fLogFailures; };
     bool IsGenReceipt() const { return fGenReceipt; };
     int64_t GetBestRecvTime() const { return nTimeBestReceived; }
@@ -162,28 +170,37 @@ public:
     void SetReIndex(bool flag) const { fReindex = flag; }
     void SetBenchMark(bool flag) const { fBenchmark = flag; }
     void SetTxIndex(bool flag) const { fTxIndex = flag; }
+    void SetTxTrace(bool flag) const { fTxTrace = flag; }
     void SetLogFailures(bool flag) const { fLogFailures = flag; }
     void SetGenReceipt(bool flag) const { fGenReceipt = flag; }
     void SetBestRecvTime(int64_t nTime) const { nTimeBestReceived = nTime; }
+    // use for cdp interest
+    uint32_t GetOneDayBlocks(const int32_t currBlockHeight) const;
     int32_t GetMaxForkHeight(int32_t currBlockHeight) const;
     const MessageStartChars& MessageStart() const { return pchMessageStart; }
     const vector<uint8_t>& AlertKey() const { return vAlertPubKey; }
     int32_t GetDefaultPort() const { return nDefaultPort; }
-    uint32_t GetBlockIntervalPreStableCoinRelease() const { return nBlockIntervalPreStableCoinRelease; }
-    uint32_t GetBlockIntervalStableCoinRelease() const { return nBlockIntervalStableCoinRelease; }
-    uint32_t GetFeatureForkHeight() const { return nFeatureForkHeight; }
-    uint32_t GetStableCoinGenesisHeight() const { return nStableCoinGenesisHeight; }
+
+    uint32_t GetVer2GenesisHeight() const { return nVer2GenesisHeight; }
+    uint32_t GetVer2ForkHeight() const { return nVer2ForkHeight; }
     uint32_t GetVer3ForkHeight() const { return nVer3ForkHeight; }
-    uint32_t GetContinuousCountBeforeFork() const { return nContinuousCountBeforeFork; }
-    uint32_t GetContinuousCountAfterFork() const { return nContinuousCountAfterFork; }
-    CRegID GetFcoinGenesisRegId() const { return CRegID(nStableCoinGenesisHeight, 1); }
-    CRegID GetDexMatchSvcRegId() const  { return CRegID(nStableCoinGenesisHeight, 3); }
+    uint32_t GetVer3_5ForkHeight() const { return nVer3_5ForkHeight; }
+
+    uint32_t GetBlockIntervalPreVer2Fork()  const { return nBlockIntervalPreVer2Fork; }
+    uint32_t GetBlockIntervalPostVer2Fork() const { return nBlockIntervalPostVer2Fork; }
+    uint32_t GetContinuousProducePreVer3Fork()  const { return nContinuousBlockProducePreVer3Fork; }
+    uint32_t GetContinuousProducePostVer3Fork() const { return nContinuousBlockProducePostVer3Fork; }
+
+    CRegID GetFcoinGenesisRegId()   const { return CRegID(nVer2GenesisHeight, 1); }
+    CRegID GetDexMatchSvcRegId()    const { return CRegID(nVer2GenesisHeight, 3); }
+    CRegID GetDex0OwnerRegId()      const { return CRegID(nVer2GenesisHeight, 3); }
+
     virtual uint64_t GetMaxFee() const { return 1000 * COIN; }
     virtual const CBlock& GenesisBlock() const = 0;
     const uint256& GetGenesisBlockHash() const { return genesisBlockHash; }
     bool CreateGenesisBlockRewardTx(vector<std::shared_ptr<CBaseTx> >& vptx, NET_TYPE type);
     bool CreateGenesisDelegateTx(vector<std::shared_ptr<CBaseTx> >& vptx, NET_TYPE type);
-    bool CreateFundCoinRewardTx(vector<std::shared_ptr<CBaseTx> >& vptx, NET_TYPE type);
+    bool CreateFundCoinMintTx(vector<std::shared_ptr<CBaseTx> >& vptx, NET_TYPE type);
     virtual bool RequireRPCPassword() const { return true; }
     const string& DataDir() const { return strDataDir; }
     virtual NET_TYPE NetworkID() const = 0;
@@ -192,7 +209,7 @@ public:
     virtual const vector<CAddress>& FixedSeeds() const = 0;
     virtual bool IsInFixedSeeds(CAddress& addr)        = 0;
     int RPCPort() const { return nRPCPort; }
-    static bool InitializeParams(int argc, const char* const argv[]);
+    static bool LoadParamsFromConfigFile(int argc, const char* const argv[]);
     static int64_t GetArg(const string& strArg, int64_t nDefault);
     static string GetArg(const string& strArg, const string& strDefault);
     static bool GetBoolArg(const string& strArg, bool fDefault);
@@ -210,6 +227,7 @@ public:
     static void SetMapArgs(const map<string, string>& mapArgs) { m_mapArgs = mapArgs; }
     static void SetMultiMapArgs(const map<string, vector<string> >& mapMultiArgs) { m_mapMultiArgs = mapMultiArgs; }
 
+
 protected:
     static map<string, string> m_mapArgs;
     static map<string, vector<string> > m_mapMultiArgs;
@@ -217,6 +235,7 @@ protected:
 protected:
     CBaseParams();
 
+    string strDataDir;
     uint256 genesisBlockHash;
     MessageStartChars pchMessageStart;
     // Raw pub key bytes for the broadcast alert signing key.
@@ -224,21 +243,28 @@ protected:
     int32_t nDefaultPort;
     int32_t nRPCPort;
     string alartPKey;
-    uint32_t nStableCoinGenesisHeight;
-    uint32_t nFeatureForkHeight;
+    uint32_t nVer2GenesisHeight;
+    uint32_t nVer2ForkHeight;
     uint32_t nVer3ForkHeight;
-    uint32_t nBlockIntervalPreStableCoinRelease;
-    uint32_t nBlockIntervalStableCoinRelease;
-    uint32_t nContinuousProduceForkHeight ;
-    uint32_t nContinuousCountBeforeFork;
-    uint32_t nContinuousCountAfterFork ;
+    uint32_t nVer3_5ForkHeight;
+    uint32_t nBlockIntervalPreVer2Fork;
+    uint32_t nBlockIntervalPostVer2Fork;
+    uint32_t nContinuousBlockProducePreVer3Fork;
+    uint32_t nContinuousBlockProducePostVer3Fork;
 
-    string strDataDir;
     vector<CDNSSeedData> vSeeds;
     vector<uint8_t> base58Prefixes[MAX_BASE58_TYPES];
 };
 
 extern CBaseParams &SysCfg();
+
+inline json_spirit::Value JsonValueFromAmount(uint64_t amount) {
+    if (SysCfg().IsDisplayValueInSawi())
+        return amount;
+    else {
+        return strprintf("%llu.%08llu", amount / COIN, amount % COIN);
+    }
+}
 
 // Note: it's deliberate that this returns "false" for regression test mode.
 inline bool TestNet() { return SysCfg().NetworkID() == TEST_NET; }

@@ -10,7 +10,7 @@
 
 class CCoinStakeTx: public CBaseTx {
 private:
-    BalanceOpType stake_type;
+    BalanceOpType stake_type; //only limited to Stake/Unstake
     TokenSymbol coin_symbol;
     uint64_t coin_amount;
 
@@ -49,7 +49,7 @@ public:
 
     virtual std::shared_ptr<CBaseTx> GetNewInstance() const { return std::make_shared<CCoinStakeTx>(*this); }
     virtual string ToString(CAccountDBCache &accountCache);
-    virtual Object ToJson(const CAccountDBCache &accountCache) const;
+    virtual Object ToJson(CCacheWrapper &cw) const;
 
     virtual bool CheckTx(CTxExecuteContext &context);
     virtual bool ExecuteTx(CTxExecuteContext &context);

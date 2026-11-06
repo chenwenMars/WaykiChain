@@ -3,6 +3,7 @@
 #include "symbol.hpp"
 #include<iostream>
 #include <cstdlib>
+#include <cerrno>
 
 #include "check.hpp"
 #include "types.hpp"
@@ -30,12 +31,12 @@ namespace wasm {
         /**
          * The symbol name of the asset
          */
-        symbol sym;
+        class symbol symbol;
 
         /**
-         * Maximum amount possible for this asset. It's capped to 2^62 - 1
+         * Maximum amount possible for this asset. It's capped to 90 billion
          */
-        static constexpr int64_t max_amount = (1LL << 62) - 1;
+        static constexpr int64_t max_amount = 900LL * 100000000 * 100000000; // 90 billion
 
         asset() {}
 
@@ -46,9 +47,9 @@ namespace wasm {
          * @param s - The name of the symbol
          */
         asset( int64_t a, class symbol s )
-                : amount(a), sym{s} {
-            check(is_amount_within_range(), "magnitude of asset amount must be less than 2^62");
-            check(sym.is_valid(), "invalid symbol name");
+                : amount(a), symbol{s} {
+            check(is_amount_within_range(), "magnitude of asset amount must be less than 9,000,000,000,000,000,000");
+            check(symbol.is_valid(), "invalid symbol name");
         }
 
         /**
@@ -65,7 +66,7 @@ namespace wasm {
          * @return true - if the asset is valid
          * @return false - otherwise
          */
-        bool is_valid() const { return is_amount_within_range() && sym.is_valid(); }
+        bool is_valid() const { return is_amount_within_range() && symbol.is_valid(); }
 
         /**
          * Set the amount of the asset
@@ -96,7 +97,7 @@ namespace wasm {
          * @post The amount of this asset is subtracted by the amount of asset a
          */
         asset &operator-=( const asset &a ) {
-            check(a.sym == sym, "attempt to subtract asset with different symbol");
+            check(a.symbol == symbol, "attempt to subtract asset with different symbol");
             amount -= a.amount;
             check(-max_amount <= amount, "subtraction underflow");
             check(amount <= max_amount, "subtraction overflow");
@@ -127,7 +128,7 @@ namespace wasm {
          * @post The amount of this asset is added with the amount of asset a
          */
         asset &operator+=( const asset &a ) {
-            check(a.sym == sym, "attempt to add asset with different symbol");
+            check(a.symbol == symbol, "attempt to add asset with different symbol");
             amount += a.amount;
             check(-max_amount <= amount, "addition underflow");
             check(amount <= max_amount, "addition overflow");
@@ -243,7 +244,7 @@ namespace wasm {
          */
         friend int64_t operator/( const asset &a, const asset &b ) {
             check(b.amount != 0, "divide by zero");
-            check(a.sym == b.sym, "comparison of assets with different symbols is not allowed");
+            check(a.symbol == b.symbol, "comparison of assets with different symbols is not allowed");
             return a.amount / b.amount;
         }
 
@@ -257,7 +258,7 @@ namespace wasm {
          * @pre Both asset must have the same symbol
          */
         friend bool operator==( const asset &a, const asset &b ) {
-            check(a.sym == b.sym, "comparison of assets with different symbols is not allowed");
+            check(a.symbol == b.symbol, "comparison of assets with different symbols is not allowed");
             return a.amount == b.amount;
         }
 
@@ -284,7 +285,7 @@ namespace wasm {
          * @pre Both asset must have the same symbol
          */
         friend bool operator<( const asset &a, const asset &b ) {
-            check(a.sym == b.sym, "comparison of assets with different symbols is not allowed");
+            check(a.symbol == b.symbol, "comparison of assets with different symbols is not allowed");
             return a.amount < b.amount;
         }
 
@@ -298,7 +299,7 @@ namespace wasm {
          * @pre Both asset must have the same symbol
          */
         friend bool operator<=( const asset &a, const asset &b ) {
-            check(a.sym == b.sym, "comparison of assets with different symbols is not allowed");
+            check(a.symbol == b.symbol, "comparison of assets with different symbols is not allowed");
             return a.amount <= b.amount;
         }
 
@@ -312,7 +313,7 @@ namespace wasm {
          * @pre Both asset must have the same symbol
          */
         friend bool operator>( const asset &a, const asset &b ) {
-            check(a.sym == b.sym, "comparison of assets with different symbols is not allowed");
+            check(a.symbol == b.symbol, "comparison of assets with different symbols is not allowed");
             return a.amount > b.amount;
         }
 
@@ -326,8 +327,25 @@ namespace wasm {
          * @pre Both asset must have the same symbol
          */
         friend bool operator>=( const asset &a, const asset &b ) {
-            check(a.sym == b.sym, "comparison of assets with different symbols is not allowed");
+            check(a.symbol == b.symbol, "comparison of assets with different symbols is not allowed");
             return a.amount >= b.amount;
+        }
+
+
+        friend bool operator<( const asset& a, int64_t b ) {
+           return (a.amount < b);
+        }
+
+        friend bool operator<=( const asset& a, int64_t b ) {
+           return (a.amount <= b);
+        }
+
+        friend bool operator>( const asset& a, int64_t b ) {
+           return (a.amount > b);
+        }
+
+        friend bool operator>=( const asset& a, int64_t b ) {
+           return (a.amount >= b);
         }
 
         /**
@@ -336,14 +354,14 @@ namespace wasm {
          * @brief %asset to std::string
          */
         std::string to_string() const {
-            uint8_t p =  sym.precision();
+            uint8_t p =  symbol.precision();
 
             //bool negative = false;
             int64_t invert = 1;
 
-            int64_t p10 = sym.precision_in_10();
+            int64_t p10 = symbol.precision_in_10();
 
-            p =  sym.precision();
+            p =  symbol.precision();
 
             char fraction[256];
             fraction[p] = '\0';
@@ -364,7 +382,7 @@ namespace wasm {
                      (int64_t)(amount / p10),
                      (fraction[0]) ? "." : "",
                      fraction,
-                     sym.code().to_string().c_str());
+                     symbol.code().to_string().c_str());
             return {str};
         }
 
@@ -390,7 +408,6 @@ namespace wasm {
                 // Parse symbol
                 string precision_digit_str;
                 if (dot_pos != string::npos) {
-                    //precision_digit_str = eosio::chain::to_string(amount_str.size() - dot_pos - 1);
                     char c[8];
                     sprintf(c, "%ld", amount_str.size() - dot_pos - 1);
 
@@ -400,22 +417,45 @@ namespace wasm {
                 }
 
                 string symbol_part = precision_digit_str + ',' + symbol_str;
-                symbol sym = symbol::from_string(symbol_part);
+                class symbol sym = symbol::from_string(symbol_part);
 
                 // Parse amount
+                bool is_negtive = amount_str.size() > 0 && amount_str[0] == '-';
                 int64_t int_part, fract_part = 0;
+                // errno can be set to any non-zero value by a library function call
+                // regardless of whether there was an error, so it needs to be cleared
+                // in order to check the error set by strtoll
+                errno = 0;
                 if (dot_pos != string::npos) {
-                    int_part   = atoi(amount_str.substr(0, dot_pos).data());
-                    fract_part = atoi(amount_str.substr(dot_pos + 1).data());
-                    if (amount_str[0] == '-') fract_part *= -1;
+                    const auto &int_str = amount_str.substr(0, dot_pos);
+                    int_part            = std::strtoll(int_str.c_str(), nullptr, 10);
+                    CHAIN_ASSERT(errno != ERANGE && is_negtive == (int_part < 0),
+                                 asset_type_exception, "The int part is overflow, str=%s", int_str);
+
+                    const auto &fract_str = amount_str.substr(dot_pos + 1);
+                    fract_part            = std::strtoll(fract_str.c_str(), nullptr, 10);
+                    CHAIN_ASSERT(errno != ERANGE, asset_type_exception,
+                                 "The fract part is overflow, str=%s", fract_str);
+                    CHAIN_ASSERT(fract_part >= 0, asset_type_exception,
+                                 "The fract part can not be negative, str=%s", fract_str);
+                    if (is_negtive) {
+                        fract_part *= -1;
+                    }
                 } else {
-                    int_part = atoi(amount_str.data());
+                    int_part = std::strtoll(amount_str.c_str(), nullptr, 10);
+                    CHAIN_ASSERT(errno != ERANGE && is_negtive == (int_part < 0),
+                                 asset_type_exception, "The int part is overflow, str=%s",
+                                 amount_str);
                 }
 
-                int64_t amount = int_part;
-                amount *= sym.precision_in_10();
+                int64_t precision_in_10 = sym.precision_in_10();
+                assert(precision_in_10 > 0);
+                int64_t amount = int_part * precision_in_10;
+                CHAIN_ASSERT(int_part == amount / precision_in_10 , asset_type_exception,
+                                "asset '%s' overflow", from);
                 amount += fract_part;
-
+                CHAIN_ASSERT(amount >= fract_part, asset_type_exception,
+                                "asset '%s' overflow", from);
 
                 return asset(amount, sym);
             }
@@ -424,7 +464,7 @@ namespace wasm {
         }
 
 
-        WASM_REFLECT( asset, (amount)(sym) )
+        WASM_REFLECT( asset, (amount)(symbol) )
 
         // /**
         // *  Serialize a asset into a stream

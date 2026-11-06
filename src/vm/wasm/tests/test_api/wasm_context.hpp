@@ -71,7 +71,7 @@ public:
         string k(buffer.data(), buffer.size());
 
         database[k] = value;
-        
+
         // if(value.size() < 4096)
         //   WASM_TRACE("key:%s value:%s", ToHex(k), ToHex(value))
 
@@ -99,13 +99,14 @@ public:
         return true;
     }
 
-    std::vector <uint8_t> GetCode(const uint64_t account) {
+    bool GetCode(const uint64_t contract, std::vector <uint8_t> &code) {
         string key("code");
         string value;
-        GetContractData(account, key, value);
+        if (!GetContractData(contract, key, value))
+            return false;
 
-        std::vector <uint8_t> code(value.begin(), value.end());
-        return code;
+        code = std::vector(value.begin(), value.end());
+        return true;
     }
 
     void print() {
@@ -121,9 +122,9 @@ public:
 };
 
 
-class CWasmContractTx{
+class CUniversalTx{
 public:
-    CWasmContractTx(){}
+    CUniversalTx(){}
 
     public:
     bool ExecuteTx(wasm::transaction_trace &trx_trace, wasm::inline_transaction& trx);
@@ -143,10 +144,10 @@ public:
 class wasm_context : public wasm_context_interface {
 
     public:
-        wasm_context(CWasmContractTx &ctrl, inline_transaction &t, CCacheWrapper &cw,
+        wasm_context(CUniversalTx &ctrl, inline_transaction &t, CCacheWrapper &cw,
                      CValidationState &s, bool mining = false,
                      uint32_t depth = 0)
-            : trx(t), control_trx(ctrl), cache(cw), state(s), recurse_depth(depth) {
+            : trx_cord(ctrl.txCord), trx(t), control_trx(ctrl), cache(cw), state(s), recurse_depth(depth) {
             reset_console();
         };
 
@@ -155,8 +156,7 @@ class wasm_context : public wasm_context_interface {
         };
 
     public:
-        std::vector <uint8_t> get_code( const uint64_t& account );
-        std::string get_abi( uint64_t account );
+        bool get_code( const uint64_t& contract, std::vector <uint8_t> &code);
         void execute_one( inline_transaction_trace &trace );
         void initialize();
         void execute( inline_transaction_trace &trace );
@@ -171,7 +171,7 @@ class wasm_context : public wasm_context_interface {
     public:
         void execute_inline( const inline_transaction& t );
         bool has_recipient    ( const uint64_t& account   ) const;
-        void require_recipient( const uint64_t& recipient );
+        void notify_recipient( const uint64_t& recipient );
         uint64_t receiver() { return _receiver;    }
         uint64_t contract() { return trx.contract; }
         uint64_t action()   { return trx.action;   }
@@ -181,10 +181,11 @@ class wasm_context : public wasm_context_interface {
         bool is_account   (const uint64_t& account)  const { return true; }
         void require_auth (const uint64_t& account ) const {}
         void require_auth2(const uint64_t& account, const uint64_t& permission ) const {}
-        bool has_authorization( const uint64_t& account ) const {return true;}
-        uint64_t pending_block_time() { return 0;      }
+        bool has_authorization( const uint64_t& account ) const { return true; }
+        uint64_t pending_block_time() { return 0; }
+        TxID get_txid() { return TxID(); }
         void     exit() { wasmif.exit(); }
-
+        bool get_system_asset_price(uint64_t base, uint64_t quote, std::vector<char>& price) { return false; };
 
         bool set_data  ( const uint64_t& contract, const string& k, const string& v )  { return cache.SetContractData(contract, k, v); }
         bool get_data  ( const uint64_t& contract, const string& k, string &v ) { return cache.GetContractData(contract, k, v); }
@@ -192,13 +193,9 @@ class wasm_context : public wasm_context_interface {
 
         std::vector<uint64_t>    get_active_producers() { return std::vector<uint64_t>(); }
         vm::wasm_allocator*      get_wasm_allocator()   { return &wasm_alloc; }
-        // bool                     is_memory_in_wasm_allocator( const char* p ) { 
-        //     WASM_TRACE("%ld", reinterpret_cast<uint64_t>(p))
-        //     return wasm_alloc.is_in_range(p); 
-        // }
-        virtual bool              is_memory_in_wasm_allocator ( const uint64_t& p ) { 
-            //WASM_TRACE("%ld:", p)
-            return wasm_alloc.is_in_range(reinterpret_cast<const char*>(p)); 
+
+        bool                     is_memory_in_wasm_allocator ( const uint64_t& p ) {
+            return wasm_alloc.is_in_range(reinterpret_cast<const char*>(p));
         }
         std::chrono::milliseconds get_max_transaction_duration(){ return std::chrono::milliseconds(wasm::max_wasm_execute_time_infinite); }
 
@@ -211,23 +208,25 @@ class wasm_context : public wasm_context_interface {
         void pause_billing_timer() { };
         void resume_billing_timer(){ };
 
+        void emit_result(const string_view &name, const string_view &type, const string_view &value) override { /* ignore */ }
     public:
 
-        inline_transaction& trx;
-        CWasmContractTx&    control_trx;
-        CCacheWrapper&      cache;
-        CValidationState&   state;
+        CTxCord                     trx_cord;
+        inline_transaction&         trx;
+        CUniversalTx&               control_trx;
+        CCacheWrapper&              cache;
+        CValidationState&           state;
 
         uint32_t                    recurse_depth;
         vector <uint64_t>           notified;
         vector <inline_transaction> inline_transactions;
 
-        wasm::wasm_interface wasmif;
-        vm::wasm_allocator   wasm_alloc;
-        uint64_t             _receiver;
+        wasm::wasm_interface        wasmif;
+        vm::wasm_allocator          wasm_alloc;
+        uint64_t                    _receiver;
         //std::chrono::milliseconds ;
 
     private:
-        std::ostringstream _pending_console_output;
+        std::ostringstream          _pending_console_output;
     };
 }

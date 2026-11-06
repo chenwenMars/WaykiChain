@@ -118,21 +118,21 @@ void CWallet::SyncTransaction(const uint256 &hash, CBaseTx *pTx, const CBlock *p
         auto GenesisBlockProgress = [&]() {};
 
         auto ConnectBlockProgress = [&]() {
-            CAccountTx netTx(this, blockhash, pBlock->GetHeight());
+            CWalletAccountTxDb acctTxDb(this, blockhash, pBlock->GetHeight());
             for (const auto &sptx : pBlock->vptx) {
                 uint256 txid = sptx->GetHash();
                 // confirm the tx is mine
                 if (IsMine(sptx.get())) {
-                    netTx.AddTx(txid, sptx.get());
+                    acctTxDb.AddTx(txid, sptx.get());
                 }
                 if (unconfirmedTx.count(txid) > 0) {
                     CWalletDB(strWalletFile).EraseUnconfirmedTx(txid);
                     unconfirmedTx.erase(txid);
                 }
             }
-            if (netTx.GetTxSize() > 0) {          // write to disk
-                mapInBlockTx[blockhash] = netTx;  // add to map
-                netTx.WriteToDisk();
+            if (acctTxDb.GetTxSize() > 0) {          // write to disk
+                mapInBlockTx[blockhash] = acctTxDb;  // add to map
+                acctTxDb.WriteToDisk();
             }
         };
 
@@ -188,61 +188,63 @@ void CWallet::EraseTransaction(const uint256 &hash) {
 
 void CWallet::ResendWalletTransactions() {
     vector<uint256> erase;
-    for (auto &te : unconfirmedTx) {
+    map<uint256, std::shared_ptr<CBaseTx> > resendTxMap;
+    {
+        LOCK(cs_wallet);
+        resendTxMap = unconfirmedTx;  // copy the tx map to avoid cycle thread lock
+    }
+    for (auto &te : resendTxMap) {
         // Do not submit the tx if in mempool already.
         if (mempool.Exists(te.first)) {
             continue;
         }
         std::shared_ptr<CBaseTx> pBaseTx = te.second->GetNewInstance();
-        auto ret                         = CommitTx(&(*pBaseTx.get()));
-        if (!std::get<0>(ret)) {
+
+        CValidationState state;
+        if (!CommitTx(&(*pBaseTx.get()), state)) {
             erase.push_back(te.first);
-            LogPrint(BCLog::WALLET, "abort invalid tx %s reason:%s\n", te.second.get()->ToString(*pCdMan->pAccountCache),
-                     std::get<1>(ret));
+            LogPrint(BCLog::RPCCMD, "rescan tx in mempool failed! code=%d, reason=%s", state.GetRejectCode(),
+                                     state.GetRejectReason());
         }
     }
-    for (auto const &tee : erase) {
-        CWalletDB(strWalletFile).EraseUnconfirmedTx(tee);
-        unconfirmedTx.erase(tee);
+    {
+        LOCK(cs_wallet);
+        for (auto const &tee : erase) {
+            CWalletDB(strWalletFile).EraseUnconfirmedTx(tee);
+            unconfirmedTx.erase(tee);
+        }
     }
 }
 
 //// Call after CreateTransaction unless you want to abort
-std::tuple<bool, string> CWallet::CommitTx(CBaseTx *pTx) {
+bool CWallet::CommitTx(CBaseTx *pTx, CValidationState &state) {
     LOCK2(cs_main, cs_wallet);
-    LogPrint(BCLog::INFO, "CommitTx() : %s\n", pTx->ToString(*pCdMan->pAccountCache));
+    LogPrint(BCLog::RPCCMD, "CommitTx() : %s\n", pTx->ToString(*pCdMan->pAccountCache));
 
-    string ret;
+
+    string wasm_execute_success_return;
 
     {
-        CValidationState state;
         if (!::AcceptToMemoryPool(mempool, state, pTx, true)) {
             // This must not fail. The transaction has already been signed and recorded.
-            LogPrint(BCLog::INFO, "CommitTx() : invalid transaction %s\n", state.GetRejectReason());
-            return std::make_tuple(false, state.GetRejectReason());
+            LogPrint(BCLog::RPCCMD, "CommitTx() : invalid transaction %s\n", state.GetRejectReason());
+            return false;
         }
 
-        ret =  state.GetReturn();
-
+        wasm_execute_success_return = state.GetReturn();
     }
 
     uint256 txid        = pTx->GetHash();
     unconfirmedTx[txid] = pTx->GetNewInstance();
-    bool flag           = CWalletDB(strWalletFile).WriteUnconfirmedTx(txid, unconfirmedTx[txid]);
-    string message      = txid.ToString();
+    bool fWriteSuccess  = CWalletDB(strWalletFile).WriteUnconfirmedTx(txid, unconfirmedTx[txid]);
 
-    if (!flag) {
-        message = strprintf("write unconfirmed tx failed: %s, corrupted wallet?", txid.GetHex());
+    if (!fWriteSuccess) {
+        return state.DoS(100, ERRORMSG("Write unconfirmed tx (%s) failed. Corrupted wallet?", txid.GetHex()),
+                            REJECT_INVALID, "save-tx-to-wallet-error");
     }
 
     ::RelayTransaction(pTx, txid);
-
-    //xiaoyu 20191106
-    if(pTx->nTxType == WASM_CONTRACT_TX){
-        message = ret;
-    }
-    return std::make_tuple(flag, message);
-
+    return true;
 }
 
 DBErrors CWallet::LoadWallet(bool fFirstRunRet) {
@@ -250,8 +252,8 @@ DBErrors CWallet::LoadWallet(bool fFirstRunRet) {
     return CWalletDB(strWalletFile, "cr+").LoadWallet(this);
 }
 
-int64_t CWallet::GetFreeCoins(TokenSymbol coinCymbol, bool isConfirmed) const {
-    int64_t ret = 0;
+uint64_t CWallet::GetFreeCoins(TokenSymbol coinCymbol, bool isConfirmed) const {
+    uint64_t ret = 0;
     {
         LOCK2(cs_main, cs_wallet);
         set<CKeyID> setKeyId;
@@ -443,17 +445,17 @@ CWallet *CWallet::GetInstance() {
     return nullptr;
 }
 
-Object CAccountTx::ToJsonObj(CKeyID const &key) const {
+Object CWalletAccountTxDb::ToJsonObj(CKeyID const &key) const {
     Object obj;
 
-    Array txsArr;
-    for (auto const &item : mapAccountTx) {
-        txsArr.push_back(item.second.get()->ToString(*pCdMan->pAccountCache));
+    Array txArr;
+    for (auto const &item : account_tx_map) {
+        txArr.push_back(item.second.get()->ToString(*pCdMan->pAccountCache));
     }
 
-    obj.push_back(Pair("block_hash",    blockHash.ToString()));
-    obj.push_back(Pair("block_height",  blockHeight));
-    obj.push_back(Pair("tx",            txsArr));
+    obj.push_back(Pair("block_hash",    block_hash.ToString()));
+    obj.push_back(Pair("block_height",  block_height));
+    obj.push_back(Pair("tx",            txArr));
 
     return obj;
 }
@@ -473,7 +475,7 @@ bool CWallet::IsMine(CBaseTx *pTx) const {
     }
 
     for (auto &keyid : keyIds) {
-        if (HaveKey(keyid) > 0) {
+        if (HasKey(keyid) > 0) {
             return true;
         }
     }
@@ -488,8 +490,9 @@ bool CWallet::CleanAll() {
              });
     unconfirmedTx.clear();
 
-    for_each(mapInBlockTx.begin(), mapInBlockTx.end(),
-             [&](std::map<uint256, CAccountTx>::reference a) { CWalletDB(strWalletFile).EraseUnconfirmedTx(a.first); });
+    for_each(mapInBlockTx.begin(), mapInBlockTx.end(), [&](std::map<uint256, CWalletAccountTxDb>::reference a) {
+        CWalletDB(strWalletFile).EraseUnconfirmedTx(a.first); } );
+
     mapInBlockTx.clear();
 
     bestBlock.SetNull();
@@ -556,7 +559,7 @@ bool CWallet::AddKey(const CKeyID &KeyId, const CKeyCombi &keyCombi) {
     if (!fFileBacked)
         return true;
 
-    if (keyCombi.HaveMainKey()) {
+    if (keyCombi.HasMainKey()) {
         if (KeyId != keyCombi.GetCKeyID())
             return false;
     }
@@ -577,7 +580,7 @@ bool CWallet::AddKey(const CKey &key) {
 
 bool CWallet::RemoveKey(const CKey &key) {
     CKeyID keyId = key.GetPubKey().GetKeyId();
-    
+
     if (!IsEncrypted()) { //unencrypted or unlocked
         CWalletDB(strWalletFile).EraseKeyStoreValue(keyId);
         mapKeys.erase(keyId);

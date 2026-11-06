@@ -32,6 +32,7 @@
 static bool fDaemon = false;
 
 void DetectShutdownThread(boost::thread_group* threadGroup) {
+    RenameThread("coin-waitexit");
     bool fShutdown = ShutdownRequested();
     // Tell the main threads to shutdown.
     while (!fShutdown) {
@@ -59,8 +60,7 @@ bool AppInit(int argc, char* argv[], boost::thread_group& threadGroup) {
         // Parameters
         //
         // If Qt is used, parameters/coin.conf are parsed in qt/Coin.cpp's main()
-        CBaseParams::InitializeParams(argc, argv);
-        SysCfg().InitializeConfig();
+        CBaseParams::LoadParamsFromConfigFile(argc, argv);
 
         if (SysCfg().IsArgCount("-?") || SysCfg().IsArgCount("--help")) {
             // First part of help message is specific to coind / RPC client
@@ -111,9 +111,8 @@ bool AppInit(int argc, char* argv[], boost::thread_group& threadGroup) {
         }
 #endif
         SysCfg().SoftSetBoolArg("-rpcserver", true);
-        InitLogging();
 
-        fRet = AppInit(threadGroup);
+        fRet = InitLogging() && AppInit(threadGroup);
     } catch (std::exception& e) {
         PrintExceptionContinue(&e, "AppInit()");
     } catch (...) {
@@ -158,6 +157,8 @@ int main(int argc, char* argv[]) {
     }
 
     Shutdown();
+
+    FinalLogging();
 
 #ifndef WIN32
     fDaemon = SysCfg().GetBoolArg("-daemon", false);

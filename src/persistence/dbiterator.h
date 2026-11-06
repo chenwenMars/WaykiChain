@@ -28,6 +28,9 @@ public:
 
     virtual bool First() = 0;
 
+    // seek to the first element not less than the given key
+    virtual bool Seek(const KeyType *pKey) = 0;
+    // seek to the first element greater than the given key
     virtual bool SeekUpper(const KeyType *pKey) = 0;
 
     virtual bool Next() = 0;
@@ -64,6 +67,15 @@ public:
     bool First() {
         const string &prefix = dbk::GetKeyPrefix(CacheType::PREFIX_TYPE);
         p_db_it->Seek(prefix);
+        return ProcessData();
+    }
+
+    bool Seek(const KeyType *pKey) {
+        if (pKey == nullptr || db_util::IsEmpty(*pKey))
+            return First();
+        string lastKeyStr = dbk::GenDbKey(CacheType::PREFIX_TYPE, *pKey);
+        p_db_it->Seek(lastKeyStr);
+
         return ProcessData();
     }
 
@@ -123,6 +135,13 @@ public:
         return ProcessData();
     }
 
+    bool Seek(const KeyType *pKey) {
+        if (pKey == nullptr || db_util::IsEmpty(*pKey))
+            return First();
+        map_it = this->db_cache.GetMapData().lower_bound(*pKey);
+        return ProcessData();
+    }
+
     bool SeekUpper(const KeyType *pKey) {
         if (pKey == nullptr || db_util::IsEmpty(*pKey))
             return First();
@@ -141,7 +160,7 @@ private:
         this->is_valid = false;
         if (map_it == this->db_cache.GetMapData().end())  return false;
         *this->sp_key = map_it->first;
-        *this->sp_value = map_it->second;
+        *this->sp_value = *map_it->second;
         this->is_valid = true;
         return true;
     }
@@ -174,6 +193,14 @@ public:
     bool First() {
         sp_map_it->First();
         sp_base_it->First();
+        return ProcessData();
+    }
+
+    bool Seek(const KeyType *pKey) {
+        if (pKey == nullptr || db_util::IsEmpty(*pKey))
+            return First();
+        sp_map_it->Seek(pKey);
+        sp_base_it->Seek(pKey);
         return ProcessData();
     }
 
@@ -268,17 +295,21 @@ private:
 };
 
 template<typename CacheType>
-class CDBIterator {
+class CDbIterator {
 public:
     typedef CDBCacheIteratorImpl<CacheType> IteratorImpl;
     typedef typename CacheType::KeyType KeyType;
     typedef typename CacheType::ValueType ValueType;
 
-    CDBIterator(CacheType &dbCacheIn): sp_it_Impl(IteratorImpl::Create(dbCacheIn)){
+    CDbIterator(CacheType &dbCacheIn): sp_it_Impl(IteratorImpl::Create(dbCacheIn)){
 
     }
     virtual bool First() {
         return sp_it_Impl->First();
+    }
+
+    virtual bool Seek(const KeyType *pKey) {
+        return sp_it_Impl->Seek(pKey);
     }
 
     virtual bool SeekUpper(const KeyType *pKey) {
@@ -307,6 +338,12 @@ public:
 protected:
     shared_ptr<IteratorImpl> sp_it_Impl;
 };
+
+
+template<typename CacheType>
+std::shared_ptr<CDbIterator<CacheType>> MakeDbIterator(CacheType &cache) {
+    return std::make_shared<CDbIterator<CacheType>>(cache);
+}
 
 struct CommonPrefixMatcher {
     // empty prefix, will match all keys
@@ -395,9 +432,9 @@ struct CommonPrefixMatcher {
     }
 };
 template<typename CacheType, typename PrefixElement, typename PrefixMatcher = CommonPrefixMatcher>
-class CDBPrefixIterator: public CDBIterator<CacheType> {
+class CDBPrefixIterator: public CDbIterator<CacheType> {
 private:
-    typedef CDBIterator<CacheType> Base;
+    typedef CDbIterator<CacheType> Base;
     typedef typename CacheType::KeyType KeyType;
     typedef typename CacheType::ValueType ValueType;
 protected:
@@ -409,7 +446,13 @@ public:
     virtual bool First() {
         KeyType lastKey;
         PrefixMatcher::MakeKeyByPrefix(prefix_element, lastKey);
-        return Base::SeekUpper(&lastKey);
+        return Base::Seek(&lastKey);
+    }
+
+    virtual bool Seek(const KeyType *pKey) {
+        if (pKey == nullptr || db_util::IsEmpty(*pKey))
+            return First();
+        return this->sp_it_Impl->Seek(pKey);
     }
 
     virtual bool SeekUpper(const KeyType *pKey) {
@@ -426,5 +469,10 @@ public:
         return prefix_element;
     }
 };
+
+template<typename CacheType, typename PrefixElement>
+shared_ptr<CDBPrefixIterator<CacheType, PrefixElement, CommonPrefixMatcher>> MakeDbPrefixIterator(CacheType &cache, const PrefixElement &prefixElement){
+    return make_shared<CDBPrefixIterator<CacheType, PrefixElement, CommonPrefixMatcher>>(cache, prefixElement);
+}
 
 #endif //PERSIST_DB_ITERATOR_H

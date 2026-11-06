@@ -23,6 +23,12 @@ struct CCdpInterestParams {
             READWRITE(VARINT(param_a));
             READWRITE(VARINT(param_b));
     )
+
+    string ToString() const {
+        return strprintf("param_a=%llu", param_a) + ", " +
+        strprintf("param_a=%llu", param_a);
+
+    }
 };
 
 typedef map<CVarIntValue<int32_t>, CCdpInterestParams> CCdpInterestParamChangeMap;
@@ -37,24 +43,28 @@ struct CCdpInterestParamChange {
 class CSysParamDBCache {
 public:
     CSysParamDBCache() {}
-    CSysParamDBCache(CDBAccess *pDbAccess) : sysParamCache(pDbAccess),
-                                             minerFeeCache(pDbAccess),
-                                             cdpParamCache(pDbAccess),
-                                             cdpInterestParamChangesCache(pDbAccess){}
-    CSysParamDBCache(CSysParamDBCache *pBaseIn) : sysParamCache(pBaseIn->sysParamCache),
-                                                  minerFeeCache(pBaseIn->minerFeeCache),
-                                                  cdpParamCache(pBaseIn->cdpParamCache),
-                                                  cdpInterestParamChangesCache(){}
+    CSysParamDBCache(CDBAccess *pDbAccess) : sys_param_chache(pDbAccess),
+                                             miner_fee_cache(pDbAccess),
+                                             cdp_param_cache(pDbAccess),
+                                             cdp_interest_param_changes_cache(pDbAccess),
+                                             current_total_bps_size_cache(pDbAccess),
+                                             new_total_bps_size_cache(pDbAccess){}
+
+    CSysParamDBCache(CSysParamDBCache *pBaseIn) : sys_param_chache(pBaseIn->sys_param_chache),
+                                                  miner_fee_cache(pBaseIn->miner_fee_cache),
+                                                  cdp_param_cache(pBaseIn->cdp_param_cache),
+                                                  cdp_interest_param_changes_cache(pBaseIn->cdp_interest_param_changes_cache),
+                                                  current_total_bps_size_cache(pBaseIn->current_total_bps_size_cache),
+                                                  new_total_bps_size_cache(pBaseIn->new_total_bps_size_cache){}
 
     bool GetParam(const SysParamType &paramType, uint64_t& paramValue) {
-        if (SysParamTable.count(paramType) == 0)
+        if (kSysParamTable.count(paramType) == 0)
             return false;
 
-        auto iter = SysParamTable.find(paramType);
-        string keyPostfix = std::get<0>(iter->second);
-        CVarIntValue<uint64_t > value ;
-        if (!sysParamCache.GetData(paramType, value)) {
-            paramValue = std::get<1>(iter->second);
+        auto iter = kSysParamTable.find(paramType);
+        CVarIntValue<uint64_t > value;
+        if (!sys_param_chache.GetData(paramType, value)) {
+            paramValue = std::get<0>(iter->second);
         } else{
             paramValue = value.get();
         }
@@ -63,14 +73,14 @@ public:
     }
 
     bool GetCdpParam(const CCdpCoinPair& coinPair, const CdpParamType &paramType, uint64_t& paramValue) {
-        if (CdpParamTable.count(paramType) == 0)
+        if (kCdpParamTable.count(paramType) == 0)
             return false;
 
-        auto iter = CdpParamTable.find(paramType);
+        auto iter = kCdpParamTable.find(paramType);
         auto key = std::make_pair(coinPair, paramType);
-        CVarIntValue<uint64_t > value ;
-        if (!cdpParamCache.GetData(key, value)) {
-            paramValue = std::get<1>(iter->second);
+        CVarIntValue<uint64_t > value;
+        if (!cdp_param_cache.GetData(key, value)) {
+            paramValue = std::get<0>(iter->second);
         } else{
             paramValue = value.get();
         }
@@ -79,62 +89,85 @@ public:
     }
 
     bool Flush() {
-        sysParamCache.Flush();
-        minerFeeCache.Flush();
+        sys_param_chache.Flush();
+        miner_fee_cache.Flush();
+        cdp_param_cache.Flush();
+        cdp_interest_param_changes_cache.Flush();
+        current_total_bps_size_cache.Flush();
+        new_total_bps_size_cache.Flush();
         return true;
     }
 
-    uint32_t GetCacheSize() const { return sysParamCache.GetCacheSize() + minerFeeCache.GetCacheSize(); }
+    uint32_t GetCacheSize() const { return sys_param_chache.GetCacheSize() +
+                                    miner_fee_cache.GetCacheSize() +
+                cdp_interest_param_changes_cache.GetCacheSize() +
+                                    current_total_bps_size_cache.GetCacheSize() +
+                                    new_total_bps_size_cache.GetCacheSize(); }
 
     void SetBaseViewPtr(CSysParamDBCache *pBaseIn) {
-        sysParamCache.SetBase(&pBaseIn->sysParamCache);
-        minerFeeCache.SetBase(&pBaseIn->minerFeeCache);
-        cdpParamCache.SetBase(&pBaseIn->cdpParamCache);
-        cdpInterestParamChangesCache.SetBase(&pBaseIn->cdpInterestParamChangesCache);
+        sys_param_chache.SetBase(&pBaseIn->sys_param_chache);
+        miner_fee_cache.SetBase(&pBaseIn->miner_fee_cache);
+        cdp_param_cache.SetBase(&pBaseIn->cdp_param_cache);
+        cdp_interest_param_changes_cache.SetBase(&pBaseIn->cdp_interest_param_changes_cache);
+        current_total_bps_size_cache.SetBase(&pBaseIn->current_total_bps_size_cache);
+        new_total_bps_size_cache.SetBase(&pBaseIn->new_total_bps_size_cache);
     }
 
     void SetDbOpLogMap(CDBOpLogMap *pDbOpLogMapIn) {
-        sysParamCache.SetDbOpLogMap(pDbOpLogMapIn);
-        minerFeeCache.SetDbOpLogMap(pDbOpLogMapIn);
-        cdpParamCache.SetDbOpLogMap(pDbOpLogMapIn);
-        cdpInterestParamChangesCache.SetDbOpLogMap(pDbOpLogMapIn);
+        sys_param_chache.SetDbOpLogMap(pDbOpLogMapIn);
+        miner_fee_cache.SetDbOpLogMap(pDbOpLogMapIn);
+        cdp_param_cache.SetDbOpLogMap(pDbOpLogMapIn);
+        cdp_interest_param_changes_cache.SetDbOpLogMap(pDbOpLogMapIn);
+        current_total_bps_size_cache.SetDbOpLogMap(pDbOpLogMapIn);
+        new_total_bps_size_cache.SetDbOpLogMap(pDbOpLogMapIn);
+
     }
 
     void RegisterUndoFunc(UndoDataFuncMap &undoDataFuncMap) {
-        sysParamCache.RegisterUndoFunc(undoDataFuncMap);
-        minerFeeCache.RegisterUndoFunc(undoDataFuncMap);
-        cdpParamCache.RegisterUndoFunc(undoDataFuncMap);
-        cdpInterestParamChangesCache.RegisterUndoFunc(undoDataFuncMap);
+        sys_param_chache.RegisterUndoFunc(undoDataFuncMap);
+        miner_fee_cache.RegisterUndoFunc(undoDataFuncMap);
+        cdp_param_cache.RegisterUndoFunc(undoDataFuncMap);
+        cdp_interest_param_changes_cache.RegisterUndoFunc(undoDataFuncMap);
+        current_total_bps_size_cache.RegisterUndoFunc(undoDataFuncMap);
+        new_total_bps_size_cache.RegisterUndoFunc(undoDataFuncMap);
     }
     bool SetParam(const SysParamType& key, const uint64_t& value){
-        return sysParamCache.SetData(key, CVarIntValue(value)) ;
+        return sys_param_chache.SetData(key, CVarIntValue(value));
     }
 
     bool SetCdpParam(const CCdpCoinPair& coinPair, const CdpParamType& paramkey, const uint64_t& value) {
-        auto key = std::make_pair(coinPair,paramkey);
-        return cdpParamCache.SetData(key, value);
+        auto key = std::make_pair(coinPair, paramkey);
+        return cdp_param_cache.SetData(key, value);
     }
     bool SetMinerFee( const TxType txType, const string feeSymbol, const uint64_t feeSawiAmount) {
 
-        auto pa = std::make_pair(txType, feeSymbol) ;
-        return minerFeeCache.SetData(pa , CVarIntValue(feeSawiAmount)) ;
+        auto pa = std::make_pair(txType, feeSymbol);
+        return miner_fee_cache.SetData(pa , CVarIntValue(feeSawiAmount));
 
     }
 
     bool SetCdpInterestParam(CCdpCoinPair& coinPair, CdpParamType paramType, int32_t height , uint64_t value){
 
         CCdpInterestParamChangeMap changeMap;
-        cdpInterestParamChangesCache.GetData(coinPair, changeMap);
+        cdp_interest_param_changes_cache.GetData(coinPair, changeMap);
         auto &item = changeMap[CVarIntValue(height)];
         if (paramType == CdpParamType::CDP_INTEREST_PARAM_A) {
             item.param_a = value;
-        } else if (paramType == CdpParamType::CDP_INTEREST_PARAM_A) {
+            uint64_t param_b;
+            if(!GetCdpParam(coinPair,CDP_INTEREST_PARAM_B, param_b))
+                return false;
+            item.param_b = param_b;
+        } else if (paramType == CdpParamType::CDP_INTEREST_PARAM_B) {
             item.param_b = value;
+            uint64_t param_a;
+            if(!GetCdpParam(coinPair,CDP_INTEREST_PARAM_A, param_a))
+                return false;
+            item.param_a = param_a;
         } else {
             assert(false && "must be param_a || param_b");
             return false;
         }
-        return cdpInterestParamChangesCache.SetData(coinPair, changeMap) ;
+        return cdp_interest_param_changes_cache.SetData(coinPair, changeMap);
     }
 
     bool GetCdpInterestParamChanges(const CCdpCoinPair& coinPair, int32_t beginHeight, int32_t endHeight,
@@ -142,7 +175,8 @@ public:
         // must validate the coinPair before call this func
         changes.clear();
         CCdpInterestParamChangeMap changeMap;
-        cdpInterestParamChangesCache.GetData(coinPair, changeMap);
+        cdp_interest_param_changes_cache.GetData(coinPair, changeMap);
+
         auto it = changeMap.begin();
         auto beginChangeIt = changeMap.end();
         // Find out which change the beginHeight should belong to
@@ -160,6 +194,7 @@ public:
                 GetCdpParamDefaultValue(CDP_INTEREST_PARAM_A),
                 GetCdpParamDefaultValue(CDP_INTEREST_PARAM_B)
             });
+            beginChangeIt = changeMap.begin();
         } else { // found
             changes.push_back({
                 beginHeight,
@@ -167,6 +202,8 @@ public:
                 beginChangeIt->second.param_a,
                 beginChangeIt->second.param_b
             });
+
+            beginChangeIt++;
         }
 
         for (it = beginChangeIt; it != changeMap.end(); it++) {
@@ -188,27 +225,73 @@ public:
 
     bool GetMinerFee( const uint8_t txType, const string feeSymbol, uint64_t& feeSawiAmount) {
 
-        auto pa = std::make_pair(txType, feeSymbol) ;
-        CVarIntValue<uint64_t > value ;
-        bool result =  minerFeeCache.GetData(pa , value) ;
+        auto pa = std::make_pair(txType, feeSymbol);
+        CVarIntValue<uint64_t > value;
+        bool result =  miner_fee_cache.GetData(pa , value);
 
         if(result)
             feeSawiAmount = value.get();
-        return result ;
+        return result;
     }
 
+    bool GetAxcSwapGwRegId(CRegID& regid) {
+        uint64_t param;
+        if(GetParam(SysParamType::AXC_SWAP_GATEWAY_REGID, param)) {
+            regid = CRegID(param);
+            return !regid.IsEmpty();
+        }
+        return false;
+    }
 
-private:
+    CRegID GetDexMatchSvcRegId() {
+        uint64_t param;
+        CRegID regid;
+        if(GetParam(SysParamType::DEX_MATCH_SVC_REGID, param)) {
+            regid = CRegID(param);
+            if(regid.IsEmpty()){
+                regid = SysCfg().GetDexMatchSvcRegId();
+            }
+        }
+        return regid;
+    }
+public:
+    bool SetNewTotalBpsSize(uint8_t newTotalBpsSize, uint32_t effectiveHeight) {
+        return new_total_bps_size_cache.SetData(std::make_pair(CVarIntValue(effectiveHeight), newTotalBpsSize));
+    }
+    bool SetCurrentTotalBpsSize(uint8_t totalBpsSize) {
+
+        return current_total_bps_size_cache.SetData(totalBpsSize);
+    }
+
+    uint8_t GetTotalBpsSize(uint32_t height) {
+
+        pair<CVarIntValue<uint32_t>,uint8_t> value;
+        if(new_total_bps_size_cache.GetData(value)){
+            auto effectiveHeight = std::get<0>(value);
+            if(height >= effectiveHeight.get()) {
+                return std::get<1>(value);
+            }
+        }
+        uint8_t totalBpsSize;
+        if(current_total_bps_size_cache.GetData(totalBpsSize)){
+            return totalBpsSize;
+        }
+
+        return IniCfg().GetTotalDelegateNum();
+    }
+
+public:
 
 
 /*       type               prefixType               key                     value                 variable               */
 /*  ----------------   -------------------------   -----------------------  ------------------   ------------------------ */
     /////////// SysParamDB
     // order tx id -> active order
-    CCompositeKVCache< dbk::SYS_PARAM,     uint8_t,      CVarIntValue<uint64_t> >              sysParamCache;
-    CCompositeKVCache< dbk::MINER_FEE,     pair<uint8_t, string>,  CVarIntValue<uint64_t> >              minerFeeCache;
-    CCompositeKVCache< dbk::CDP_PARAM,     pair<CCdpCoinPair,uint8_t>, CVarIntValue<uint64_t> >      cdpParamCache;
-    // [prefix]cdp_coin_pair -> cdp_interest_param_changes (contain all changes)
-    CCompositeKVCache< dbk::CDP_INTEREST_PARAMS, CCdpCoinPair, CCdpInterestParamChangeMap> cdpInterestParamChangesCache;
-
+    CCompositeKVCache< dbk::SYS_PARAM,     uint8_t,      CVarIntValue<uint64_t> >               sys_param_chache;
+    CCompositeKVCache< dbk::MINER_FEE,     pair<uint8_t, string>,  CVarIntValue<uint64_t> >     miner_fee_cache;
+    CCompositeKVCache< dbk::CDP_PARAM,     pair<CCdpCoinPair,uint8_t>, CVarIntValue<uint64_t> > cdp_param_cache;
+    // [prefix]cdpCoinPair -> cdp_interest_param_changes (contain all changes)
+    CCompositeKVCache< dbk::CDP_INTEREST_PARAMS, CCdpCoinPair, CCdpInterestParamChangeMap>      cdp_interest_param_changes_cache;
+    CSimpleKVCache<dbk:: TOTAL_BPS_SIZE, uint8_t>                                               current_total_bps_size_cache;
+    CSimpleKVCache<dbk:: NEW_TOTAL_BPS_SIZE, pair<CVarIntValue<uint32_t>,uint8_t>>              new_total_bps_size_cache;
 };

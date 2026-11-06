@@ -1,21 +1,23 @@
 #pragma once
 #pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
 
-#include <chrono>
-
+#include "wasm/types/time.hpp"
 #include "wasm/types/types.hpp"
 #include "wasm/types/uint128.hpp"
 #include "wasm/types/varint.hpp"
 #include "wasm/types/name.hpp"
 #include "wasm/types/asset.hpp"
+#include "wasm/types/regid.hpp"
+#include "wasm/types/hash256.hpp"
 #include "commons/json/json_spirit.h"
 #include "commons/json/json_spirit_value.h"
-//#include "wasm/exceptions.hpp"
 #include "wasm/abi_def.hpp"
 #include "wasm/wasm_constants.hpp"
 #include "wasm/wasm_log.hpp"
 
 #include "wasm/exception/exceptions.hpp"
+
+#include <chrono>
 
 namespace wasm {
     using namespace json_spirit;
@@ -28,7 +30,7 @@ namespace wasm {
 
     typedef Config::Value_type::Config_type Config_type;
 
-    static inline string FromHex( string str ) {
+    static inline string from_hex( string str ) {
 
         std::map<char, uint8_t> hex = {
                 {'0', 0x00},
@@ -66,7 +68,7 @@ namespace wasm {
     }
 
     template<typename T>
-    static inline string ToHex( const T &t, string separator = "" ) {
+    static inline string to_hex( const T &t, string separator = "" ) {
         const std::string hex = "0123456789abcdef";
         std::ostringstream o;
 
@@ -77,7 +79,7 @@ namespace wasm {
 
     }
 
-    static inline string FromTime( const std::time_t &t ) {
+    static inline string from_time( const std::time_t &t ) {
 
         char szTime[128];
         std::tm *p;
@@ -88,7 +90,7 @@ namespace wasm {
         return string(szTime);
     }
 
-    static inline std::time_t ToTime( const std::string &t ) {
+    static inline std::time_t to_time( const std::string &t ) {
 
         int year, month, day, hour, minute, second;
         sscanf((char *) t.data(), "%d-%d-%dT%d:%d:%d", &year, &month, &day, &hour, &minute, &second);
@@ -110,6 +112,14 @@ namespace wasm {
     }
 
     static inline void to_variant( const wasm::name &t, wasm::variant &v ) {
+        v = wasm::variant(t.to_string());
+    }
+
+    static inline void to_variant( const wasm::regid &t, wasm::variant &v ) {
+        v = wasm::variant(t.to_string());
+    }
+
+    static inline void to_variant( const wasm::hash256 &t, wasm::variant &v ) {
         v = wasm::variant(t.to_string());
     }
 
@@ -182,10 +192,8 @@ namespace wasm {
         v = wasm::variant(static_cast< int64_t >(t));
     }
 
-    static inline void to_variant( const system_clock::time_point &t, wasm::variant &v ) {
-
-        std::time_t time = std::chrono::system_clock::to_time_t(t);
-        v = wasm::variant(FromTime(time));
+    static inline void to_variant( const wasm::time_point &t, wasm::variant &v ) {
+        v = t.to_iso_string();
     }
 
 
@@ -211,32 +219,24 @@ namespace wasm {
         v = wasm::variant();
     }
 
-    // static inline void to_variant( const std::time_point_sec &t, wasm::variant &v ) {
-    //     // string str(&t.hash[0], &t.hash[sizeof(t.hash)/sizeof(t.hash[0])]);
-    //     // v = wasm::variant(ToHex(str,""));
-
-    // }
-
     static inline void to_variant( const wasm::checksum160_type &t, wasm::variant &v ) {
         //to_variant(t.hash, v);
         string str(&t.hash[0], &t.hash[sizeof(t.hash) / sizeof(t.hash[0])]);
-        v = wasm::variant(ToHex(str, ""));
+        v = wasm::variant(to_hex(str, ""));
 
 
     }
 
     static inline void to_variant( const wasm::checksum256_type &t, wasm::variant &v ) {
-        //to_variant(t.hash, v);
         string str(&t.hash[0], &t.hash[sizeof(t.hash) / sizeof(t.hash[0])]);
-        //WASM_TRACE("%s", ToHex(str,"").c_str())
-        v = wasm::variant(ToHex(str, ""));
+        v = wasm::variant(to_hex(str, ""));
 
     }
 
     static inline void to_variant( const wasm::checksum512_type &t, wasm::variant &v ) {
         string str(&t.hash[0], &t.hash[sizeof(t.hash) / sizeof(t.hash[0])]);
 
-        v = wasm::variant(ToHex(str, ""));
+        v = wasm::variant(to_hex(str, ""));
     }
 
 
@@ -375,6 +375,23 @@ namespace wasm {
         CHAIN_THROW(wasm_chain::abi_parse_exception, "abi parse fail:%s", "json variant must be a string")
     }
 
+    static inline void from_variant( const wasm::variant &v, wasm::regid &t ) {
+        if (v.type() == json_spirit::str_type) {
+            t = wasm::regid(v.get_str());
+            return;
+        }
+        CHAIN_THROW(wasm_chain::abi_parse_exception, "abi parse fail:%s", "json variant must be a string")
+    }
+
+    static inline void from_variant( const wasm::variant &v, wasm::hash256 &t ) {
+        if (v.type() == json_spirit::str_type) {
+            t = wasm::hash256(v.get_str());
+            return;
+        }
+        CHAIN_THROW(wasm_chain::abi_parse_exception, "abi parse fail:%s", "json variant must be a string")
+    }
+
+
     static inline void from_variant( const wasm::variant &v, wasm::bytes &t ) {
         if (v.type() == json_spirit::str_type) {
             string str = v.get_str();
@@ -466,9 +483,12 @@ namespace wasm {
         CHAIN_THROW(wasm_chain::abi_parse_exception, "abi parse fail:%s", "json variant must be an int")
     }
 
-    static inline void from_variant( const wasm::variant &v, system_clock::time_point &t ) {
+    static inline void from_variant( const wasm::variant &v, wasm::time_point &t ) {
         if (v.type() == json_spirit::str_type) {
-            t = std::chrono::system_clock::from_time_t(ToTime(v.get_str()));
+            try {
+                t = wasm::time_point::from_iso_string(v.get_str());
+            }
+            CHAIN_CAPTURE_AND_RETHROW( "unable to convert ISO-formatted std::string to wasm::time_point" )
             return;
         }
         CHAIN_THROW(wasm_chain::abi_parse_exception, "abi parse fail:%s", "json variant must be a string")
@@ -501,8 +521,8 @@ namespace wasm {
 
         T t;
         from_variant(v, t);
-        opt = t; 
-        //opt = std::optional<T>(t);   
+        opt = t;
+        //opt = std::optional<T>(t);
     }
 
     // static inline void from_variant( const wasm::variant &v, std::time_point_sec &t ) {
@@ -513,7 +533,7 @@ namespace wasm {
 
     static inline void from_variant( const wasm::variant &v, wasm::checksum160_type &t ) {
         if (v.type() == json_spirit::str_type) {
-            FromHex(v.get_str()).copy((char *) &t, sizeof(t));
+            from_hex(v.get_str()).copy((char *) &t, sizeof(t));
             return;
         }
 
@@ -522,7 +542,7 @@ namespace wasm {
 
     static inline void from_variant( const wasm::variant &v, wasm::checksum256_type &t ) {
         if (v.type() == json_spirit::str_type) {
-            FromHex(v.get_str()).copy((char *) &t, sizeof(t));
+            from_hex(v.get_str()).copy((char *) &t, sizeof(t));
             return;
         }
         CHAIN_THROW(wasm_chain::abi_parse_exception, "abi parse fail:%s", "json variant must be a string")
@@ -531,7 +551,7 @@ namespace wasm {
 
     static inline void from_variant( const wasm::variant &v, checksum512_type &t ) {
         if (v.type() == json_spirit::str_type) {
-            FromHex(v.get_str()).copy((char *) &t, sizeof(t));
+            from_hex(v.get_str()).copy((char *) &t, sizeof(t));
             return;
         }
         CHAIN_THROW(wasm_chain::abi_parse_exception, "abi parse fail:%s", "json variant must be a string")
@@ -553,16 +573,14 @@ namespace wasm {
             auto o = v.get_obj();
             for (wasm::Object::const_iterator i = o.begin(); i != o.end(); ++i) {
                 string key = Config_type::get_name(*i);
-                ABI_Enum abi_key = mapStringValues[key];
-                switch (abi_key) {
+                abi_typeid_t type_id = string2typeid[key];
+                switch (type_id) {
                     case ID_Symbolcode : {
                         from_variant(Config_type::get_value(*i), symbol_code);
-                        //std::cout << symbol_code <<std::endl ;
                         break;
                     }
                     case ID_Precision : {
                         from_variant(Config_type::get_value(*i), precision);
-                        //std::cout << "precision line203" <<std::endl ;
                         break;
                     }
                     default :
@@ -585,16 +603,14 @@ namespace wasm {
             auto o = v.get_obj();
             for (wasm::Object::const_iterator i = o.begin(); i != o.end(); ++i) {
                 string key = Config_type::get_name(*i);
-                ABI_Enum abi_key = mapStringValues[key];
-                switch (abi_key) {
+                abi_typeid_t type_id = string2typeid[key];
+                switch (type_id) {
                     case ID_Amount : {
                         from_variant(Config_type::get_value(*i), t.amount);
-                        //std::cout << t.amount <<std::endl ;
                         break;
                     }
                     case ID_Symbol : {
-                        from_variant(Config_type::get_value(*i), t.sym);
-                        //std::cout << t.sym.to_string() <<std::endl ;
+                        from_variant(Config_type::get_value(*i), t.symbol);
                         break;
                     }
                     default :
@@ -617,8 +633,8 @@ namespace wasm {
             auto o = v.get_obj();
             for (wasm::Object::const_iterator i = o.begin(); i != o.end(); ++i) {
                 string key = Config_type::get_name(*i);
-                ABI_Enum abi_key = mapStringValues[key];
-                switch (abi_key) {
+                abi_typeid_t type_id = string2typeid[key];
+                switch (type_id) {
                     case ID_Name : {
                         from_variant(Config_type::get_value(*i), field.name);
                         break;
@@ -642,8 +658,8 @@ namespace wasm {
             auto o = v.get_obj();
             for (wasm::Object::const_iterator i = o.begin(); i != o.end(); ++i) {
                 string key = Config_type::get_name(*i);
-                ABI_Enum abi_key = mapStringValues[key];
-                switch (abi_key) {
+                abi_typeid_t type_id = string2typeid[key];
+                switch (type_id) {
                     case ID_Name : {
                         from_variant(Config_type::get_value(*i), s.name);
                         break;
@@ -674,8 +690,8 @@ namespace wasm {
             auto o = v.get_obj();
             for (wasm::Object::const_iterator i = o.begin(); i != o.end(); ++i) {
                 string key = Config_type::get_name(*i);
-                ABI_Enum abi_key = mapStringValues[key];
-                switch (abi_key) {
+                abi_typeid_t type_id = string2typeid[key];
+                switch (type_id) {
                     case ID_Name : {
                         from_variant(Config_type::get_value(*i), a.name);
                         break;
@@ -708,8 +724,8 @@ namespace wasm {
             auto o = v.get_obj();
             for (wasm::Object::const_iterator i = o.begin(); i != o.end(); ++i) {
                 string key = Config_type::get_name(*i);
-                ABI_Enum abi_key = mapStringValues[key];
-                switch (abi_key) {
+                abi_typeid_t type_id = string2typeid[key];
+                switch (type_id) {
                     case ID_Name : {
                         from_variant(Config_type::get_value(*i), table.name);
                         break;
@@ -747,8 +763,8 @@ namespace wasm {
             auto o = v.get_obj();
             for (wasm::Object::const_iterator i = o.begin(); i != o.end(); ++i) {
                 string key = Config_type::get_name(*i);
-                ABI_Enum abi_key = mapStringValues[key];
-                switch (abi_key) {
+                abi_typeid_t type_id = string2typeid[key];
+                switch (type_id) {
                     case ID_ID : {
                         from_variant(Config_type::get_value(*i), c.id);
                         break;
@@ -775,8 +791,8 @@ namespace wasm {
             auto o = v.get_obj();
             for (wasm::Object::const_iterator i = o.begin(); i != o.end(); ++i) {
                 string key = Config_type::get_name(*i);
-                ABI_Enum abi_key = mapStringValues[key];
-                switch (abi_key) {
+                abi_typeid_t type_id = string2typeid[key];
+                switch (type_id) {
                     case ID_New_type_name : {
                         from_variant(Config_type::get_value(*i), type.new_type_name);
                         break;
@@ -805,11 +821,8 @@ namespace wasm {
 
                 for (wasm::Object::const_iterator i = o.begin(); i != o.end(); ++i) {
                     string key = Config_type::get_name(*i);
-                    ABI_Enum abi_key = mapStringValues[key];
-
-                    //WASM_TRACE("%s", key.c_str())
-
-                    switch (abi_key) {
+                    abi_typeid_t type_id = string2typeid[key];
+                    switch (type_id) {
                         case ID_Comment :
                             break;
                         case ID_Version : {

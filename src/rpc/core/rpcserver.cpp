@@ -110,7 +110,6 @@ int64_t AmountToRawValue(const Value& value) {
     return nAmount;
 }
 
-Value ValueFromAmount(int64_t amount) { return (double)amount / (double)COIN; }
 
 string HexBits(unsigned int nBits) {
     union {
@@ -350,6 +349,7 @@ void StopRPCServer() {
         httpRPCTimerInterface.reset();
     }
     StopHTTPServer();
+    FinalizeHTTPServer();
 }
 
 void RPCRunLater(const std::string& name, std::function<void()> func, int64_t nSeconds) {

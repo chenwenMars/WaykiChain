@@ -12,6 +12,7 @@
 #include <leveldb/filter_policy.h>
 #include <memenv.h>
 #include <boost/filesystem.hpp>
+#include <boost/thread.hpp>
 #include "commons/json/json_spirit_value.h"
 
 void ThrowError(const leveldb::Status &status) {
@@ -109,7 +110,7 @@ int64_t CLevelDBWrapper::GetDbCount() {
         } catch (std::exception &e) {
             if (pCursor)
                 delete pCursor;
-            ERRORMSG("%s : Deserialize or I/O error - %s", __func__, e.what());
+            ERRORMSG("Deserialize or I/O error - %s", e.what());
             return 0;
         }
     }

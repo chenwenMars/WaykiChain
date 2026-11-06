@@ -20,6 +20,7 @@
 #include "main.h"
 #include "miner/miner.h"
 #include "net.h"
+#include "p2p/node.h"
 #include "persistence/blockdb.h"
 #include "persistence/accountdb.h"
 #include "persistence/txdb.h"
@@ -58,6 +59,8 @@
 #include <boost/interprocess/sync/file_lock.hpp>
 #include <boost/assign/list_of.hpp>
 
+#include "wasm/modules/wasm_native_dispatch.hpp"
+
 using namespace std;
 using namespace boost::assign;
 using namespace boost;
@@ -69,6 +72,7 @@ CWallet *pWalletMain;
 static std::unique_ptr<ECCVerifyHandle> globalVerifyHandle;
 
 extern void wasm_code_cache_free();
+//extern void wasm_load_native_modules_and_register_routes();
 
 #ifdef WIN32
 // Win32 LevelDB doesn't use filedescriptors, and the ones used for
@@ -118,7 +122,7 @@ enum BindFlags {
 
 volatile bool fRequestShutdown = false;
 
-void StartShutdown() { fRequestShutdown = true; }
+void RequestShutdown() { fRequestShutdown = true; }
 
 bool ShutdownRequested() { return fRequestShutdown; }
 
@@ -131,7 +135,7 @@ void Shutdown() {
     if (!lockShutdown)
         return;
 
-    RenameThread("Coin-shutoff");
+    RenameThread("coin-shutoff");
 
     StopRPCServer();
 
@@ -160,8 +164,8 @@ void Shutdown() {
     boost::filesystem::remove(GetPidFile());
     UnregisterAllWallets();
 
-    if (pWalletMain)
-        delete pWalletMain;
+    delete pWalletMain;
+    pWalletMain = nullptr;
 
     // Uninitialize elliptic curve code
     globalVerifyHandle.reset();
@@ -176,7 +180,7 @@ void Shutdown() {
 // Signal handlers are very limited in what they are allowed to do, so:
 //
 void HandleSIGTERM(int32_t) {
-    fRequestShutdown = true;
+    StartShutdown();
 }
 
 void HandleSIGHUP(int32_t) {
@@ -185,6 +189,7 @@ void HandleSIGHUP(int32_t) {
 
 bool static InitError(const string &str) {
     LogPrint(BCLog::ERROR, "%s\n", str);
+    fprintf(stderr, "Initialize error: %s\n", str.c_str());
     return false;
 }
 
@@ -218,8 +223,9 @@ string HelpMessage() {
     strUsage += "  -pid=<file>            " + _("Specify pid file (default: coin.pid)") + "\n";
     strUsage += "  -reindex               " + _("Rebuild block chain index from current blk000??.dat files") + " " + _("on startup") + "\n";
     strUsage += "  -txindex               " + _("Maintain a full transaction index (default: 0)") + "\n";
+    strUsage += "  -txtrace               " + _("Maintain trace of transaction (default: 1)") + "\n";
     strUsage += "  -logfailures           " + _("Log failures into level db in detail (default: 0)") + "\n";
-    strUsage += "  -genreceipt               " + _("Whether generate receipt(default: 0)") + "\n";
+    strUsage += "  -genreceipt            " + _("Whether generate receipt(default: 0)") + "\n";
 
     strUsage += "\n" + _("Connection options:") + "\n";
     strUsage += "  -addnode=<ip>          " + _("Add a node to connect to and attempt to keep the connection open") + "\n";
@@ -319,6 +325,7 @@ string HelpMessage() {
 
     strUsage += "  -rpcwhitelistcmd=<method>          " + _("Add permitted RPC method to whitelist") + "\n";
     strUsage += "  -rpcblacklistcmd=<method>          " + _("Add Banned RPC method to blacklist") + "\n";
+    strUsage += "  -contracts_console                 " + _("Print wasm contract logs to console(default: 0)") + "\n";
     return strUsage;
 }
 
@@ -339,6 +346,7 @@ void ThreadImport(vector<boost::filesystem::path> vImportFiles) {
 
     // -reindex
     if (SysCfg().IsReindex()) {
+
         CImportingNow imp;
         int32_t nFile = 0;
         while (true) {
@@ -356,6 +364,7 @@ void ThreadImport(vector<boost::filesystem::path> vImportFiles) {
         LogPrint(BCLog::INFO, "Reindexing finished\n");
         // To avoid ending up in a situation without genesis block, re-try initializing (no-op if reindexing worked):
         InitBlockIndex();
+        pWalletMain->ResendWalletTransactions();
     }
 
     // hardcoded $DATADIR/bootstrap.dat
@@ -384,6 +393,26 @@ void ThreadImport(vector<boost::filesystem::path> vImportFiles) {
             LogPrint(BCLog::INFO, "Warning: Could not open blocks file %s\n", path.string());
         }
     }
+}
+
+/** Initialize native_modules
+ *  register routes for native tx(inline_transaction) dispatch
+ */
+void wasm_load_native_modules_and_register_routes() {
+    auto& modules = get_wasm_native_modules();
+    if(modules.size() == 0){
+        modules.push_back(std::make_shared<wasm_native_module>());
+        modules.push_back(std::make_shared<wasm_bank_native_module>());
+        modules.push_back(std::make_shared<native_voting_module>());
+    }
+
+    auto& abi_router = get_wasm_abi_route();
+    auto& act_router = get_wasm_act_route();
+
+    for(auto& module: modules){
+        module->register_routes(abi_router, act_router);
+    }
+
 }
 
 /** Initialize Coin.
@@ -440,9 +469,13 @@ bool AppInit(boost::thread_group &threadGroup) {
     // Initialize elliptic curve code
     ECC_Start();
     globalVerifyHandle.reset(new ECCVerifyHandle());
+
     // Sanity check
     if (!ECC_InitSanityCheck())
         return fprintf(stderr, "Elliptic curve cryptography sanity check failure. Aborting.");
+
+    //register wasm routes for native inline_transaction dispatch
+    wasm_load_native_modules_and_register_routes();
 
 #if defined(__SVR4) && defined(__sun)
     // ignore SIGPIPE on Solaris
@@ -493,6 +526,8 @@ bool AppInit(boost::thread_group &threadGroup) {
             LogPrint(BCLog::INFO, "AppInit : parameter interaction: -salvagewallet=1 -> setting -rescan=1\n");
     }
 
+    SysCfg().SetTxTrace(SysCfg().GetBoolArg("-txtrace", true));
+
     // Make sure enough file descriptors are available
     int32_t nBind   = max((int32_t)SysCfg().IsArgCount("-bind"), 1);
     nMaxConnections = SysCfg().GetArg("-maxconnections", 125);
@@ -521,16 +556,6 @@ bool AppInit(boost::thread_group &threadGroup) {
     if (!lock.try_lock()) {
         return InitError(strprintf(_("Cannot obtain a lock on data directory %s. coin Core is probably already running."), strDataDir));
     }
-
-    if (!LogInstance().StartLogging()) {
-        return InitError(strprintf("Could not open debug log file %s",
-                        LogInstance().m_file_path.string()));
-    }
-    // if (GetBoolArg("-shrinkdebugfile", !fDebug))
-    //     ShrinkDebugFile();
-
-     if (!LogInstance().m_log_timestamps)
-        LogPrint(BCLog::INFO, "Startup time: %s\n", FormatISO8601DateTime(GetTime()));
 
     LogPrint(BCLog::INFO, "Default data directory %s\n", GetDefaultDataDir().string());
     LogPrint(BCLog::INFO, "Using data directory %s\n", GetDataDir().string());
@@ -730,7 +755,7 @@ bool AppInit(boost::thread_group &threadGroup) {
 
             } catch (std::exception &e) {
                 LogPrint(BCLog::INFO, "%s\n", e.what());
-                strLoadError = _("Error opening block database");
+                strLoadError = _("Error opening block database! ") + e.what();
                 break;
             }
 
@@ -766,7 +791,7 @@ bool AppInit(boost::thread_group &threadGroup) {
 
     if (SysCfg().IsArgCount("-printblock")) {
         string strMatch = SysCfg().GetArg("-printblock", "");
-        int32_t nFound      = 0;
+        int32_t nFound  = 0;
         for (map<uint256, CBlockIndex *>::iterator mi = mapBlockIndex.begin(); mi != mapBlockIndex.end(); ++mi) {
             uint256 hash = (*mi).first;
             if (strncmp(hash.ToString().c_str(), strMatch.c_str(), strMatch.size()) == 0) {
@@ -774,7 +799,9 @@ bool AppInit(boost::thread_group &threadGroup) {
                 CBlock block;
                 ReadBlockFromDisk(pIndex, block);
                 block.BuildMerkleTree();
+
                 block.Print();
+
                 nFound++;
             }
         }
@@ -806,28 +833,9 @@ bool AppInit(boost::thread_group &threadGroup) {
     }
     LogPrint(BCLog::INFO, "Added the latest %d blocks to transaction memory cache (%dms)\n", nCount, GetTimeMillis() - nStart);
 
-    nStart       = GetTimeMillis();
-    pBlockIndex  = chainActive.Tip();
-    nCacheHeight = 11;  // TODO: parameterize 11.
-    nCount       = 0;
-
-
-    if (pBlockIndex) {
-        if (!ReadBlockFromDisk(pBlockIndex, block))
-            return InitError("Failed to read block from disk");
+    if (!pCdMan->pPpCache->ReleadBlocks(*pCdMan->pSysParamCache, chainActive.Tip())) {
+        return InitError("Init prices of PriceFeedMemCache failed");
     }
-
-    while (pBlockIndex && nCacheHeight-- > 0) {
-        if (!ReadBlockFromDisk(pBlockIndex, block))
-            return InitError("Failed to read block from disk");
-
-        if (!pCdMan->pPpCache->AddPriceByBlock(block))
-            return InitError("Failed to add block to price point memory cache");
-
-        pBlockIndex = pBlockIndex->pprev;
-        ++nCount;
-    }
-    LogPrint(BCLog::INFO, "Added the latest %d blocks to price point memory cache (%dms)\n", nCount, GetTimeMillis() - nStart);
 
     vector<boost::filesystem::path> vImportFiles;
     if (SysCfg().IsArgCount("-loadblock")) {
@@ -866,7 +874,10 @@ bool AppInit(boost::thread_group &threadGroup) {
     // Generate coins in the background
     if (pWalletMain) {
         GenerateProduceBlockThread(SysCfg().GetBoolArg("-genblock", false), pWalletMain, SysCfg().GetArg("-genblocklimit", -1));
-        pWalletMain->ResendWalletTransactions();
+
+        if (!SysCfg().IsReindex()) {
+            pWalletMain->ResendWalletTransactions();
+        }
         threadGroup.create_thread(boost::bind(&ThreadFlushWalletDB, boost::ref(pWalletMain->strWalletFile)));
 
         //resend unconfirmed tx
@@ -890,16 +901,16 @@ fs::path AbsPathForConfigVal(const fs::path& path, bool net_specific = true)
  * Note that this is called very early in the process lifetime, so you should be
  * careful about what global state you rely on here.
  */
-void InitLogging()
+bool InitLogging()
 {
-    LogInstance().m_print_to_file = !SysCfg().GetBoolArg("-debuglogfile", false);
+    LogInstance().m_print_to_file = SysCfg().GetBoolArg("-logprinttofile", false);
     LogInstance().m_file_path = AbsPathForConfigVal(SysCfg().GetArg("-debuglogfile", DEFAULT_DEBUGLOGFILE));
     LogInstance().m_print_to_console = SysCfg().GetBoolArg("-logprinttoconsole", true);
     LogInstance().m_print_file_line  = SysCfg().GetBoolArg("-logprintfileline", false);
     LogInstance().m_log_timestamps = SysCfg().GetBoolArg("-logtimestamps", DEFAULT_LOGTIMESTAMPS);
     LogInstance().m_log_time_micros = SysCfg().GetBoolArg("-logtimemicros", DEFAULT_LOGTIMEMICROS);
     LogInstance().m_log_threadnames = SysCfg().GetBoolArg("-logthreadnames", DEFAULT_LOGTHREADNAMES);
-    LogInstance().m_totoal_written_size = LogInstance().GetCurrentLogSize() ;
+    LogInstance().m_totoal_written_size = LogInstance().GetCurrentLogSize();
     LogInstance().m_max_log_size = SysCfg().GetArg("-debuglogfilesize", 500 * 1024 * 1024);
     fLogIPs = SysCfg().GetBoolArg("-logips", DEFAULT_LOGIPS);
 
@@ -923,8 +934,15 @@ void InitLogging()
         }
     }
 
+
+    if (!LogInstance().StartLogging()) {
+        fprintf(stdout, "Start logging error! log_file=%s",
+                        LogInstance().m_file_path.string().c_str());
+        return false;
+    }
+
     std::string version_string = FormatFullVersion();
-#ifdef DEBUG
+#ifdef VER_DEBUG
     version_string += " (debug build)";
 #else
     version_string += " (release build)";
@@ -933,4 +951,16 @@ void InitLogging()
 
     // LogInstance().DisableCategory("INFO");
     // LogInstance().EnableCategory("NET");
+    // if (GetBoolArg("-shrinkdebugfile", !fDebug))
+    //     ShrinkDebugFile();
+
+     if (!LogInstance().m_log_timestamps)
+        LogPrint(BCLog::INFO, "Startup time: %s\n", FormatISO8601DateTime(GetTime()));
+
+    return true;
+}
+
+void FinalLogging() {
+    LogInstance().Flush(); // make sure the logs are saved to storage!
+    LogInstance().DisconnectTestLogger();
 }

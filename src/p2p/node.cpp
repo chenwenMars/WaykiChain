@@ -25,6 +25,27 @@ limitedmap<CInv, int64_t> mapAlreadyAskedFor(MAX_INV_SZ);
 CNode* pnodeSync = nullptr;
 
 
+map<uint256, tuple<NodeId, list<QueuedBlock>::iterator, int64_t>> mapBlocksInFlight;  // downloading blocks
+map<uint256, tuple<NodeId, list<uint256>::iterator, int64_t>> mapBlocksToDownload;    // blocks to be downloaded
+
+void InitializeNode(NodeId nodeid, const CNode *pNode) {
+    LOCK(cs_mapNodeState);
+    CNodeState &state = mapNodeState.insert(make_pair(nodeid, CNodeState())).first->second;
+    state.name        = pNode->addrName;
+}
+
+void FinalizeNode(NodeId nodeid) {
+    LOCK(cs_mapNodeState);
+    CNodeState *state = State(nodeid);
+
+    for (const auto &entry : state->vBlocksInFlight)
+        mapBlocksInFlight.erase(entry.hash);
+
+    for (const auto &hash : state->vBlocksToDownload)
+        mapBlocksToDownload.erase(hash);
+
+    mapNodeState.erase(nodeid);
+}
 
 // Requires cs_mapNodeState.
 CNodeState *State(NodeId pNode) {
@@ -184,44 +205,6 @@ bool CNode::Ban(const CNetAddr& addr) {
     }
     return true;
 }
-
-#undef X
-#define X(name) stats.name = name
-void CNode::copyStats(CNodeStats& stats) {
-    stats.nodeid = this->GetId();
-    X(nServices);
-    X(nLastSend);
-    X(nLastRecv);
-    X(nTimeConnected);
-    X(addrName);
-    X(nVersion);
-    X(cleanSubVer);
-    X(fInbound);
-    X(nStartingHeight);
-    X(nSendBytes);
-    X(nRecvBytes);
-    stats.fSyncNode = (this == pnodeSync);
-
-    // It is common for nodes with good ping times to suddenly become lagged,
-    // due to a new block arriving or other large transfer.
-    // Merely reporting pingtime might fool the caller into thinking the node was still responsive,
-    // since pingtime does not update until the ping is complete, which might take a while.
-    // So, if a ping is taking an unusually long time in flight,
-    // the caller can immediately detect that this is happening.
-    int64_t nPingUsecWait = 0;
-    if ((0 != nPingNonceSent) && (0 != nPingUsecStart)) {
-        nPingUsecWait = GetTimeMicros() - nPingUsecStart;
-    }
-
-    // Raw ping time is in microseconds, but show it to user as whole seconds (Coin users should be well used to small
-    // numbers with many decimal places by now :)
-    stats.dPingTime = (((double)nPingUsecTime) / 1e6);
-    stats.dPingWait = (((double)nPingUsecWait) / 1e6);
-
-    // Leave string empty if addrLocal invalid (not filled in yet)
-    stats.addrLocal = addrLocal.IsValid() ? addrLocal.ToString() : "";
-}
-#undef X
 
 // requires LOCK(cs_vRecvMsg)
 bool CNode::ReceiveMsgBytes(const char* pch, uint32_t nBytes) {

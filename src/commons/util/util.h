@@ -15,6 +15,7 @@
 #include "commons/serialize.h"
 #include "commons/tinyformat.h"
 #include "commons/compat/compat.h"
+#include "commons/json/json_spirit_value.h"
 
 #include <stdarg.h>
 #include <stdint.h>
@@ -24,6 +25,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <chrono>
 
 #ifndef WIN32
 #include <sys/resource.h>
@@ -32,7 +34,6 @@
 #endif
 
 #include <boost/filesystem/path.hpp>
-#include <boost/thread.hpp>
 
 class CNetAddr;
 class uint256;
@@ -73,19 +74,7 @@ T* alignup(T* p) {
 #define MSG_NOSIGNAL 0
 #endif
 
-inline void MilliSleep(int64_t n) {
-// Boost's sleep_for was uninterruptable when backed by nanosleep from 1.50
-// until fixed in 1.52. Use the deprecated sleep method for the broken case.
-// See: https://svn.boost.org/trac/boost/ticket/7238
-#if defined(HAVE_WORKING_BOOST_SLEEP_FOR)
-    boost::this_thread::sleep_for(boost::chrono::milliseconds(n));
-#elif defined(HAVE_WORKING_BOOST_SLEEP)
-    boost::this_thread::sleep(boost::posix_time::milliseconds(n));
-#else
-// should never get here
-#error missing boost sleep implementation
-#endif
-}
+void MilliSleep(int64_t n);
 
 struct DebugLogFile {
     DebugLogFile() : m_newLine(true), m_fileout(NULL), m_mutexDebugLog(NULL) {}
@@ -113,8 +102,6 @@ extern volatile bool fReopenDebugLog;
 void RandAddSeed();
 void RandAddSeedPerfmon();
 void SetupEnvironment();
-
-#define strprintf tfm::format
 
 void PrintExceptionContinue(std::exception* pex, const char* pszThread);
 string FormatMoney(int64_t n, bool fPlus = false);
@@ -188,7 +175,7 @@ inline int64_t atoi64(const string& str) {
 #endif
 }
 inline uint64_t atoui64(const string& str) {
-    return strtoull(str.c_str(), NULL, 10) ;
+    return strtoull(str.c_str(), NULL, 10);
 }
 
 inline int32_t atoi(const string& str) { return atoi(str.c_str()); }
@@ -460,5 +447,73 @@ inline std::string StrToUpper(const std::string &str) {
 	});
     return ret;
 }
+
+template <size_t N>
+void splitString(string (&arr)[N], string str)
+{
+    int n = 0;
+    istringstream iss(str);
+    for (auto it = istream_iterator<string>(iss); it != istream_iterator<string>() && n < N; ++it, ++n)
+        arr[n] = *it;
+}
+
+bool ConvertPermsToString(uint64_t perms, uint8_t total_perms_count, string& permsList);
+
+static inline bool CalcAmountByRatio(uint64_t amountIn, uint64_t ratio, uint64_t ratioBoost, uint64_t &amountOut) {
+    assert(ratioBoost != 0);
+    uint128_t calcAmount = amountIn * (uint128_t)ratio / ratioBoost;
+    if (calcAmount > ULLONG_MAX) {
+        return false;
+    }
+    amountOut = calcAmount;
+    return true;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Benchmark
+
+class Benchmark {
+public:
+    using system_clock = std::chrono::system_clock;
+    typedef std::chrono::time_point<system_clock> Time;
+
+public:
+    Benchmark(const char *msgIn, const char *fileIn, int lineIn, const char *funcIn)
+        : Benchmark(msgIn, fileIn, lineIn, funcIn, system_clock::now()) {}
+    Benchmark(const char *msgIn, const char *fileIn, int lineIn, const char *funcIn,
+              const Time &startIn)
+        : msg(msgIn), file(fileIn), line(lineIn), func(funcIn), start(startIn) {}
+    ~Benchmark() { end(); }
+
+    inline void log(const char *msgIn, const char *fileIn, int lineIn, const char *funcIn,
+                    const Time &endTime) {
+        auto us = std::chrono::duration_cast<std::chrono::microseconds>(endTime - start);
+        fprintf(stdout, "%ld - %ld [%s:%i] %s [%s]%s, spent=%ld us\n",
+                endTime.time_since_epoch().count(), start.time_since_epoch().count(), fileIn,
+                lineIn, funcIn, "BENCHMARK", msgIn, us.count());
+    }
+    inline void end() {
+        if (!is_end) {
+            log(msg, file, line, func, system_clock::now());
+            is_end = true;
+        }
+    }
+    const char *msg  = nullptr;
+    const char *file = nullptr;
+    int line         = 0;
+    const char *func = nullptr;
+
+    Time start;
+    bool is_end = false;
+};
+
+std::shared_ptr<Benchmark> MakeBenchmark(const char *msg, const char *fileIn, int lineIn,
+                                         const char *funcIn);
+
+std::shared_ptr<Benchmark> MakeBenchmark(const char *msg, const char *fileIn, int lineIn,
+                                         const char *funcIn, const Benchmark::Time &startIn);
+
+#define MAKE_BENCHMARK(msg) MakeBenchmark(msg, __FILE__, __LINE__, __func__)
+#define MAKE_BENCHMARK_START(msg, start) MakeBenchmark(msg, __FILE__, __LINE__, __func__, start)
 
 #endif

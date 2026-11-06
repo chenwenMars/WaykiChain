@@ -7,6 +7,7 @@
 #define COMMONS_TYPES_H
 
 #include <string>
+#include <vector>
 #include <utility>
 #include <unordered_set>
 #include <unordered_map>
@@ -20,6 +21,7 @@ typedef std::string CoinUnitName;    //defined in coin unit type table
 typedef std::pair<TokenSymbol, TokenSymbol> TradingPair;
 typedef std::string AssetSymbol;     //8 chars max, E.g. WICC
 typedef std::string PriceSymbol;     //8 chars max, E.g. USD, CNY, EUR, BTC
+typedef std::pair<TokenSymbol, TokenSymbol> PriceCoinPair;
 
 using uint128_t = unsigned __int128;
 
@@ -45,7 +47,7 @@ template <typename EnumType, typename ValueType, typename HashType = int32_t>
 using EnumTypeMap = std::unordered_map<EnumType, ValueType, EnumTypeHash<EnumType, HashType>>;
 
 template <typename EnumType, typename HashType = int32_t>
-using UnorderdEnumMap = std::unordered_set<EnumType, EnumTypeHash<EnumType, HashType>>;
+using EnumUnorderedSet = std::unordered_set<EnumType, EnumTypeHash<EnumType, HashType>>;
 
 namespace container {
     template<typename Container>
@@ -53,5 +55,52 @@ namespace container {
         dest.insert(dest.end(), std::begin(appended), std::end(appended));
     }
 };
+
+typedef uint32_t HeightType;
+typedef uint32_t TxIndex;
+
+
+enum BalanceOpType : uint8_t {
+    NULL_OP  = 0,  //!< invalid op
+    ADD_FREE = 1,  //!< external send coins to this account
+    SUB_FREE = 2,  //!< send coins to external account
+    STAKE    = 3,  //!< free   -> staked
+    UNSTAKE  = 4,  //!< staked -> free
+    FREEZE   = 5,  //!< free   -> frozen
+    UNFREEZE = 6,  //!< frozen -> free, and then SUB_FREE for further ops
+    VOTE     = 7,  //!< free -> voted
+    UNVOTE   = 8,  //!< voted -> free
+    PLEDGE   = 9,  //!< free -> pledged
+    UNPLEDGE = 10, //!< pledged -> free, and then SUB_FREE for further ops
+    DEX_DEAL = 11  //!< unfreeze and transfer out to peer
+};
+
+struct BalanceOpTypeHash {
+    size_t operator()(const BalanceOpType& type) const noexcept { return std::hash<uint8_t>{}(type); }
+};
+
+static const unordered_map<BalanceOpType, string, BalanceOpTypeHash> kBalanceOpTypeTable = {
+    { NULL_OP,  "NULL_OP"   },
+    { ADD_FREE, "ADD_FREE"  },
+    { SUB_FREE, "SUB_FREE"  },
+    { STAKE,    "STAKE"     },
+    { UNSTAKE,  "UNSTAKE"   },
+    { FREEZE,   "FREEZE"    },
+    { UNFREEZE, "UNFREEZE"  },
+    { VOTE,     "VOTE"      },
+    { UNVOTE,   "UNVOTE"    },
+    { PLEDGE,   "PLEDGE"    },
+    { UNPLEDGE, "UNPLEDGE"  },
+    { DEX_DEAL, "DEX_DEAL"  }
+};
+
+inline string GetBalanceOpTypeName(const BalanceOpType opType) {
+    auto it = kBalanceOpTypeTable.find(opType);
+    if (it != kBalanceOpTypeTable.end()) {
+        return it->second;
+    } else {
+        return "NULL_OP";
+    }
+}
 
 #endif //COMMONS_TYPES_H

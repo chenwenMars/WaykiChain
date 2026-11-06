@@ -18,9 +18,7 @@
 #include "miner/miner.h"
 #include "main.h"
 #include "tx/coinstaketx.h"
-#include "tx/nickidregtx.h"
 #include "tx/accountregtx.h"
-#include "tx/mulsigtx.h"
 #include "tx/dextx.h"
 #include "tx/txserializer.h"
 #include "config/scoin.h"
@@ -37,6 +35,53 @@ using namespace boost;
 using namespace boost::assign;
 using namespace json_spirit;
 
+namespace RPC_PARAM {
+    vector<uint8_t> GetSignature(const Value &jsonValue) {
+        vector<uint8_t> signature;
+
+        string binStr, errStr;
+        if (!ParseHex(jsonValue.get_str(), binStr, errStr))
+            throw JSONRPCError(RPC_INVALID_PARAMS, strprintf("invalid signature! %s", errStr));
+        if (binStr.size() == 0 || binStr.size() > 100) {
+            throw JSONRPCError(RPC_INVALID_PARAMS, strprintf("Invalid signature size=%d, hex=%s", binStr.size(), jsonValue.get_str()));
+        }
+        return vector<uint8_t>(binStr.begin(), binStr.end());
+    }
+}
+
+
+// TxSignatureMap {keyid -> {account, pSignature} }
+typedef map<CKeyID, pair<CAccount, vector<uint8_t>*> > TxSignatureMap;
+
+TxSignatureMap GetTxSignatureMap(CBaseTx &tx, CAccountDBCache &accountCache) {
+
+    if (tx.IsRelayForbidden()) {
+        return {};
+    }
+
+    TxSignatureMap txSignatureMap;
+    auto AddTxSignature = [&](const CUserID &uid, vector<uint8_t>* pSignature) {
+        if (!uid.IsEmpty()) {
+            auto account =  RPC_PARAM::GetUserAccount(accountCache, uid);
+            txSignatureMap.emplace(account.keyid, make_pair(account, pSignature));
+        }
+    };
+
+    AddTxSignature(tx.txUid, &tx.signature);
+
+    if(tx.nTxType == UNIVERSAL_TX) {
+        CUniversalTx &universalTx = dynamic_cast<CUniversalTx&>(tx);
+        for (auto &item : universalTx.signatures) {
+            AddTxSignature(CRegID(item.account), &item.signature);
+        }
+    } else if (tx.nTxType == DEX_OPERATOR_ORDER_TX) {
+        dex::CDEXOperatorOrderTx &opOrderTx = dynamic_cast<dex::CDEXOperatorOrderTx&>(tx);
+        if (opOrderTx.has_operator_config)
+            AddTxSignature(opOrderTx.operator_uid, &opOrderTx.operator_signature);
+    }
+    return txSignatureMap;
+}
+
 Value gettxdetail(const Array& params, bool fHelp) {
     if (fHelp || params.size() != 1)
         throw runtime_error(
@@ -51,9 +96,11 @@ Value gettxdetail(const Array& params, bool fHelp) {
             + HelpExampleCli("gettxdetail","\"c5287324b89793fdf7fa97b6203dfd814b8358cfa31114078ea5981916d7a8ac\"")
             + "\nAs json rpc call\n"
             + HelpExampleRpc("gettxdetail","\"c5287324b89793fdf7fa97b6203dfd814b8358cfa31114078ea5981916d7a8ac\""));
+
     return GetTxDetailJSON(uint256S(params[0].get_str()));
 }
 
+/* Deprecated for common usages but still required for cold mining account registration */
 Value submitaccountregistertx(const Array& params, bool fHelp) {
     if (fHelp || params.size() == 0)
         throw runtime_error("submitaccountregistertx \"addr\" [\"fee\"]\n"
@@ -68,18 +115,16 @@ Value submitaccountregistertx(const Array& params, bool fHelp) {
             + "\nAs json rpc call\n"
             + HelpExampleRpc("submitaccountregistertx", "\"wTtCsc5X9S5XAy1oDuFiEAfEwf8bZHur1W\", 10000"));
 
-
-
     EnsureWalletIsUnlocked();
 
     const CUserID& txUid = RPC_PARAM::GetUserId(params[0], true);
-    ComboMoney fee          = RPC_PARAM::GetFee(params, 1, ACCOUNT_REGISTER_TX);
+    ComboMoney fee       = RPC_PARAM::GetFee(params, 1, ACCOUNT_REGISTER_TX);
     int32_t validHeight  = chainActive.Height();
 
     CAccount account = RPC_PARAM::GetUserAccount(*pCdMan->pAccountCache, txUid);
-    RPC_PARAM::CheckAccountBalance(account, SYMB::WICC, SUB_FREE, fee.GetSawiAmount());
+    RPC_PARAM::CheckAccountBalance(account, SYMB::WICC, SUB_FREE, fee.GetAmountInSawi());
 
-    if (account.HaveOwnerPubKey())
+    if (account.HasOwnerPubKey())
         throw JSONRPCError(RPC_WALLET_ERROR, "Account was already registered");
 
     CPubKey pubkey;
@@ -94,253 +139,44 @@ Value submitaccountregistertx(const Array& params, bool fHelp) {
 
     CAccountRegisterTx tx;
     tx.txUid        = pubkey;
-    tx.minerUid     = minerUid;
-    tx.llFees       = fee.GetSawiAmount();
+    tx.miner_uid    = minerUid;
+    tx.llFees       = fee.GetAmountInSawi();
     tx.valid_height = validHeight;
 
     return SubmitTx(account.keyid, tx);
 }
 
-Value submitnickidregistertx(const Array& params, bool fHelp) {
-    if (fHelp || params.size() < 2)
-        throw runtime_error("submitnickidregistertx \"addr or regid\" \"nickid\" [\"fee\"]\n"
-                            "\nregister account to acquire its regid\n"
+Value submitaccountpermscleartx(const Array& params, bool fHelp) {
+    if (fHelp || params.size() < 1 || params.size() > 2)
+        throw runtime_error("submitaccountpermscleartx \"addr\"  [\"fee\"]\n"
+                            "\n clear self perms\n"
                             "\nArguments:\n"
-                            "1.\"addr or regid\":    (string, required)\n"
-                            "2.\"nickid\":  (string, required) 12 chars in 12345abcdefghijklmnopqrstuvwxyz\n"
-                            "3.\"fee\":     (combomoney, optional)\n"
+                            "1.\"addr or regid\":  (string, required) the tx submitor's id\n"
+                            "2.\"fee\":            (combomoney, optional)\n"
                             "\nResult:\n"
                             "\"txid\":      (string) The transaction id.\n"
                             "\nExamples:\n"
-                            + HelpExampleCli("submitnickidregistertx", "\"wTtCsc5X9S5XAy1oDuFiEAfEwf8bZHur1W\" \"ccssddxx1122\" 1000000")
+                            + HelpExampleCli("submitaccountpermscleartx",
+                                             R"("wTtCsc5X9S5XAy1oDuFiEAfEwf8bZHur1W"  "WICC:1000000:SAWI")")
                             + "\nAs json rpc call\n"
-                            + HelpExampleRpc("submitnickidregistertx", "\"wTtCsc5X9S5XAy1oDuFiEAfEwf8bZHur1W\", 1000000"));
-
-
-    EnsureWalletIsUnlocked();
-
+                            + HelpExampleRpc("submitaccountpermscleartx",
+                                             R"("wTtCsc5X9S5XAy1oDuFiEAfEwf8bZHur1W", "WICC:1000000:SAWI")"));
     const CUserID& txUid = RPC_PARAM::GetUserId(params[0], true);
-    string nickid        = params[1].get_str() ;
-    ComboMoney fee          = RPC_PARAM::GetFee(params, 2, NICKID_REGISTER_TX);
+    ComboMoney fee          = RPC_PARAM::GetFee(params, 1, ACCOUNT_PERMS_CLEAR_TX);
     int32_t validHeight  = chainActive.Height();
 
     CAccount account = RPC_PARAM::GetUserAccount(*pCdMan->pAccountCache, txUid);
-    RPC_PARAM::CheckAccountBalance(account, fee.symbol, SUB_FREE, fee.GetSawiAmount());
-    if(!account.nickid.IsEmpty()){
-        throw JSONRPCError(RPC_WALLET_ERROR,"the account have nickid already!");
-    }
+    RPC_PARAM::CheckAccountBalance(account, fee.symbol, SUB_FREE, fee.GetAmountInSawi());
 
-    if(nickid.find(".") != nickid.npos){
-        throw JSONRPCError(RPC_WALLET_ERROR, "nickid can't contain char dot ");
-    }
+    CAccountPermsClearTx tx(txUid, validHeight, fee.symbol, fee.GetAmountInSawi());
 
-    try{
-        if(wasm::name(nickid).value == 0) {
-            throw JSONRPCError(RPC_WALLET_ERROR, "nickid's format is error");
-        }
-    }catch (const wasm_chain::exception& e ){
-        throw JSONRPCError(RPC_WALLET_ERROR, e.to_detail_string());
-    }catch(...){
-        throw;
-    }
-
-
-    std::shared_ptr<CNickIdRegisterTx> pBaseTx = std::make_shared<CNickIdRegisterTx>(txUid, nickid, fee.GetSawiAmount(), fee.symbol, validHeight);
-
-    return SubmitTx(account.keyid, *pBaseTx);
-}
-
-Value submitutxospendtx(const Array& params, bool fHelp) {
-
-    if (fHelp || (params.size() != 5 && params.size() != 6))
-        throw runtime_error(
-                "submitutxospendtx \"prior_utxo_txid\" \"prior_utxo_secret\" \"symbol:coin:unit\" \"symbol:fee:unit\" \"utxo_info\" [\"memo\"]\n"
-                "\nSend coins to a given address.\n" +
-                HelpRequiringPassphrase() +
-                "\nArguments:\n"
-                "1.\"prior_utxo_txid\":     (string, required) The utxo txid you want to spend\n"
-                "2.\"prior_utxo_secret\":   (string, required) The utxo secret you want to spend\n"
-                "3.\"symbol:coin:unit\":    (symbol:amount:unit, required) transferred coins\n"
-                "4.\"symbol:fee:unit\":     (symbol:amount:unit, required) fee paid to miner, default is WICC:10000:sawi\n"
-                "5.\"utxo_info\"            (json,required) the info of utxo\n"
-                "{\n"
-                "    "
-                "}"
-                "6.\"memo\":                (string, optional)\n"
-                "\nResult:\n"
-                "\"txid\"                   (string) The transaction id.\n"
-                "\nExamples:\n" +
-                HelpExampleCli("submitutxospendtx",
-                               "\"wLKf2NqwtHk3BfzK5wMDfbKYN1SC3weyR4\" \"wNDue1jHcgRSioSDL4o1AzXz3D72gCMkP6\" "
-                               "\"WICC:1000000:sawi\" \"WICC:10000:sawi\" \"{}\" \"Hello, WaykiChain!\"") +
-                "\nAs json rpc call\n" +
-                HelpExampleRpc("submitutxospendtx",
-                               "\"wLKf2NqwtHk3BfzK5wMDfbKYN1SC3weyR4\", \"wNDue1jHcgRSioSDL4o1AzXz3D72gCMkP6\", "
-                               "\"WICC:1000000:sawi\", \"WICC:10000:sawi\", \"{}\", \"Hello, WaykiChain!\""));
-
-    EnsureWalletIsUnlocked();
-
-    CUserID sendUserId = RPC_PARAM::GetUserId(params[0], true);
-    uint256 prior_utxo_txid = uint256S(params[1].get_str()) ;
-    string prior_utxo_secret = params[2].get_str() ;
-    ComboMoney cmFee   = RPC_PARAM::GetFee(params, 3, UCOIN_TRANSFER_TX);
-    Object utxoInfo = params[4].get_obj() ;
-    string memo = "";
-    if(params.size()>5){
-        memo = params[5].get_str();
-    }
-
-
-    Value lock_durationValue ;
-    Value secret_hashValue ;
-    Value collect_timeoutValue ;
-
-    uint256 secret_hash = uint256();
-    uint64_t collect_timeout = 0 ;
-    uint64_t lock_duration = 0;
-
-    if(JSON::GetObjectFieldValue(utxoInfo, "lock_duration",lock_durationValue)){
-        lock_duration = lock_durationValue.get_int();
-    }
-
-
-    if(JSON::GetObjectFieldValue(utxoInfo, "secret_hash",secret_hashValue)){
-        secret_hash = uint256S(secret_hashValue.get_str()) ;
-    }
-
-
-    if(JSON::GetObjectFieldValue(utxoInfo, "collect_timeout", collect_timeoutValue)){
-        collect_timeout = collect_timeoutValue.get_int() ;
-    }
-
-
-    CAccount account = RPC_PARAM::GetUserAccount(*pCdMan->pAccountCache, sendUserId);
-    RPC_PARAM::CheckAccountBalance(account, cmFee.symbol, SUB_FREE, cmFee.GetSawiAmount());
-    if(!account.nickid.IsEmpty()){
-        throw JSONRPCError(RPC_WALLET_ERROR,"the account have nickid already!");
-    }
-
-
-    HTLCCondition hc ;
-    hc.secret_hash = secret_hash;
-    hc.collect_timeout = collect_timeout ;
-    if(hc.secret_hash != uint256() || hc.collect_timeout != 0)
-        hc.is_null = false ;
-
-
-    UTXOEntity entity ;
-    entity.lock_duration = lock_duration ;
-    entity.htlc_cond = hc ;
-    entity.is_null     = false ;
-
-    auto pBaseTx = std::make_shared<CCoinUTXOTx>(sendUserId,chainActive.Height(),
-                                                 cmFee.symbol, cmFee.GetSawiAmount(),entity, memo);
-    pBaseTx->prior_utxo_secret = prior_utxo_secret ;
-    pBaseTx->prior_utxo_txid   = prior_utxo_txid ;
-
-    return SubmitTx(account.keyid, *pBaseTx);
+    return SubmitTx(account.keyid,tx);
 
 }
 
-
-Value submitcreateutxotx(const Array& params, bool fHelp ){
-
-    if (fHelp || (params.size() != 5 && params.size() != 6))
-        throw runtime_error(
-                "submitcreateutxotx \"from\" \"to\" \"symbol:coin:unit\" \"symbol:fee:unit\" \"utxo_info\" [\"memo\"]\n"
-                "\nSend coins to a given address.\n" +
-                HelpRequiringPassphrase() +
-                "\nArguments:\n"
-                "1.\"from\":                (string, required) The address where coins are sent from\n"
-                "2.\"to\":                  (string, required) The address where coins are received\n"
-                "3.\"symbol:coin:unit\":    (symbol:amount:unit, required) transferred coins\n"
-                "4.\"symbol:fee:unit\":     (symbol:amount:unit, required) fee paid to miner, default is WICC:10000:sawi\n"
-                "5.\"utxo_info\"            (json,required) the info of utxo\n"
-                "{\n"
-                "    "
-                "}"
-                "6.\"memo\":                (string, optional)\n"
-                "\nResult:\n"
-                "\"txid\"                   (string) The transaction id.\n"
-                "\nExamples:\n" +
-                HelpExampleCli("submitcreateutxotx",
-                               "\"wLKf2NqwtHk3BfzK5wMDfbKYN1SC3weyR4\" \"wNDue1jHcgRSioSDL4o1AzXz3D72gCMkP6\" "
-                               "\"WICC:1000000:sawi\" \"WICC:10000:sawi\" \"{}\" \"Hello, WaykiChain!\"") +
-                "\nAs json rpc call\n" +
-                HelpExampleRpc("submitcreateutxotx",
-                               "\"wLKf2NqwtHk3BfzK5wMDfbKYN1SC3weyR4\", \"wNDue1jHcgRSioSDL4o1AzXz3D72gCMkP6\", "
-                               "\"WICC:1000000:sawi\", \"WICC:10000:sawi\", \"{}\", \"Hello, WaykiChain!\""));
-
-    EnsureWalletIsUnlocked();
-
-    CUserID sendUserId = RPC_PARAM::GetUserId(params[0], true);
-    CUserID recvUserId = RPC_PARAM::GetUserId(params[1]);
-    ComboMoney cmCoin  = RPC_PARAM::GetComboMoney(params[2], SYMB::WICC);
-    ComboMoney cmFee   = RPC_PARAM::GetFee(params, 3, UCOIN_TRANSFER_TX);
-    Object utxoInfo = params[4].get_obj() ;
-    string memo = "";
-    if(params.size()>5){
-        memo = params[5].get_str();
-    }
-
-
-    Value lock_durationValue ;
-    Value secret_hashValue ;
-    Value collect_timeoutValue ;
-
-    uint256 secret_hash = uint256();
-    uint64_t collect_timeout = 0 ;
-    uint64_t lock_duration = 0;
-
-    if(JSON::GetObjectFieldValue(utxoInfo, "lock_duration",lock_durationValue)){
-        lock_duration = lock_durationValue.get_int();
-    }
-
-
-    if(JSON::GetObjectFieldValue(utxoInfo, "secret_hash",secret_hashValue)){
-        secret_hash = uint256S(secret_hashValue.get_str()) ;
-    }
-
-
-    if(JSON::GetObjectFieldValue(utxoInfo, "collect_timeout", collect_timeoutValue)){
-        collect_timeout = collect_timeoutValue.get_int() ;
-    }
-
-
-    CAccount account = RPC_PARAM::GetUserAccount(*pCdMan->pAccountCache, sendUserId);
-    RPC_PARAM::CheckAccountBalance(account, cmFee.symbol, SUB_FREE, cmFee.GetSawiAmount());
-    if(!account.nickid.IsEmpty()){
-        throw JSONRPCError(RPC_WALLET_ERROR,"the account have nickid already!");
-    }
-
-
-    HTLCCondition hc ;
-    hc.secret_hash = secret_hash;
-    hc.collect_timeout = collect_timeout ;
-    if(hc.secret_hash != uint256() || hc.collect_timeout != 0)
-        hc.is_null = false ;
-
-
-    UTXOEntity entity ;
-    entity.coin_symbol = cmCoin.symbol ;
-    entity.coin_amount = cmCoin.GetSawiAmount() ;
-    entity.to_uid      = recvUserId ;
-    entity.lock_duration = lock_duration ;
-    entity.htlc_cond = hc ;
-    entity.is_null     = false ;
-
-    auto pBaseTx = std::make_shared<CCoinUTXOTx>(sendUserId,chainActive.Height(),
-            cmFee.symbol, cmFee.GetSawiAmount(),entity, memo);
-
-
-    return SubmitTx(account.keyid, *pBaseTx);
-}
-
-
-
-Value submitcontractdeploytx(const Array& params, bool fHelp) {
+Value submitluacontractdeploytx(const Array& params, bool fHelp) {
     if (fHelp || params.size() < 3 || params.size() > 5) {
-        throw runtime_error("submitcontractdeploytx \"addr\" \"filepath\" \"fee\" [\"height\"] [\"contract_memo\"]\n"
+        throw runtime_error("submitluacontractdeploytx \"addr\" \"filepath\" \"fee\" [\"height\"] [\"contract_memo\"]\n"
             "\ncreate a transaction of registering a contract\n"
             "\nArguments:\n"
             "1.\"addr\":            (string, required) contract owner address from this wallet\n"
@@ -351,10 +187,10 @@ Value submitcontractdeploytx(const Array& params, bool fHelp) {
             "\nResult:\n"
             "\"txid\":              (string)\n"
             "\nExamples:\n"
-            + HelpExampleCli("submitcontractdeploytx",
+            + HelpExampleCli("submitluacontractdeploytx",
                 "\"WiZx6rrsBn9sHjwpvdwtMNNX2o31s3DEHH\" \"/tmp/lua/myapp.lua\" 100000000 10000 \"Hello, WaykiChain!\"") +
                 "\nAs json rpc call\n"
-            + HelpExampleRpc("submitcontractdeploytx",
+            + HelpExampleRpc("submitluacontractdeploytx",
                 "WiZx6rrsBn9sHjwpvdwtMNNX2o31s3DEHH, \"/tmp/lua/myapp.lua\", 100000000, 10000, \"Hello, WaykiChain!\""));
     }
 
@@ -369,28 +205,30 @@ Value submitcontractdeploytx(const Array& params, bool fHelp) {
     string memo           = params.size() > 4 ? params[4].get_str() : "";
 
     if (memo.size() > MAX_CONTRACT_MEMO_SIZE)
-        throw JSONRPCError(RPC_INVALID_PARAMETER, "Contract memo is too large");
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "Contract memo too large");
 
     if (!txUid.is<CRegID>())
-        throw JSONRPCError(RPC_INVALID_PARAMETER, "Regid does not exist or immature");
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "RegId not exist or immature");
 
     CAccount account = RPC_PARAM::GetUserAccount(*pCdMan->pAccountCache, txUid);
-    RPC_PARAM::CheckAccountBalance(account, SYMB::WICC, SUB_FREE, fee.GetSawiAmount());
+    RPC_PARAM::CheckAccountBalance(account, SYMB::WICC, SUB_FREE, fee.GetAmountInSawi());
 
     CLuaContractDeployTx tx;
     tx.txUid        = txUid;
     tx.contract     = CLuaContract(contractScript, memo);
-    tx.llFees       = fee.GetSawiAmount();
-    tx.nRunStep     = tx.contract.GetContractSize();
+    tx.llFees       = fee.GetAmountInSawi();
+    tx.fuel     = tx.contract.GetContractSize();
     tx.valid_height = validHegiht;
 
     return SubmitTx(account.keyid, tx);
 }
 
-Value submitcontractcalltx(const Array& params, bool fHelp) {
+Value submitluacontractcalltx(const Array& params, bool fHelp) {
     if (fHelp || params.size() < 5 || params.size() > 6) {
         throw runtime_error(
-            "submitcontractcalltx \"sender_addr\" \"contract_regid\" \"arguments\" \"amount\" \"fee\" [\"height\"]\n"
+            "submitluacontractcalltx \"sender_addr\" \"contract_regid\" \"arguments\" \"amount\" \"fee\" [\"height\"]\n"
+            " @@Deprecated: pls use submitucontractcalltx instead."
+            "\n"
             "\ncreate contract invocation transaction\n"
             "\nArguments:\n"
             "1.\"sender_addr\":     (string, required) tx sender's base58 addr\n"
@@ -402,12 +240,14 @@ Value submitcontractcalltx(const Array& params, bool fHelp) {
             "\nResult:\n"
             "\"txid\":              (string)\n"
             "\nExamples:\n" +
-            HelpExampleCli("submitcontractcalltx",
+            HelpExampleCli("submitluacontractcalltx",
                            "\"wQWKaN4n7cr1HLqXY3eX65rdQMAL5R34k6\" \"100-1\" \"01020304\" 10000 10000 100") +
             "\nAs json rpc call\n" +
-            HelpExampleRpc("submitcontractcalltx",
+            HelpExampleRpc("submitluacontractcalltx",
                            "\"wQWKaN4n7cr1HLqXY3eX65rdQMAL5R34k6\", \"100-1\", \"01020304\", 10000, 10000, 100"));
     }
+
+    throw JSONRPCError(RPC_INVALID_PARAMETER, "Deprecated since R3");
 
     RPCTypeCheck(params, list_of(str_type)(str_type)(str_type)(int_type)(str_type)(int_type));
 
@@ -421,7 +261,7 @@ Value submitcontractcalltx(const Array& params, bool fHelp) {
         throw JSONRPCError(RPC_INVALID_PARAMETER, "Invalid contract regid");
     }
 
-    if (!pCdMan->pContractCache->HaveContract(appRegId)) {
+    if (!pCdMan->pContractCache->HasContract(appRegId)) {
         throw JSONRPCError(RPC_INVALID_PARAMETER, "Failed to acquire contract");
     }
 
@@ -436,14 +276,14 @@ Value submitcontractcalltx(const Array& params, bool fHelp) {
 
     CAccount account = RPC_PARAM::GetUserAccount(*pCdMan->pAccountCache, txUid);
     RPC_PARAM::CheckAccountBalance(account, SYMB::WICC, SUB_FREE, amount);
-    RPC_PARAM::CheckAccountBalance(account, SYMB::WICC, SUB_FREE, fee.GetSawiAmount());
+    RPC_PARAM::CheckAccountBalance(account, SYMB::WICC, SUB_FREE, fee.GetAmountInSawi());
 
     CLuaContractInvokeTx tx;
     tx.nTxType      = LCONTRACT_INVOKE_TX;
     tx.txUid        = txUid;
     tx.app_uid      = appUid;
     tx.coin_amount  = amount;
-    tx.llFees       = fee.GetSawiAmount();
+    tx.llFees       = fee.GetAmountInSawi();
     tx.arguments    = arguments;
     tx.valid_height = validHegiht;
 
@@ -468,7 +308,7 @@ Value submitdelegatevotetx(const Array& params, bool fHelp) {
             "   }\n"
             "       ,...\n"
             " ]\n"
-            "3.\"fee\": (comboMoney string or numberic, required) pay fee to miner\n"
+            "3.\"fee\": (comboMoney string or numberic, required) pay fee to miner, only support WICC\n"
             "4.\"height\": (numeric optional) valid height. When not supplied, the tip block "
             "height in chainActive will be used.\n"
             "\nResult:\n"
@@ -492,11 +332,14 @@ Value submitdelegatevotetx(const Array& params, bool fHelp) {
     int32_t validHegiht  = params.size() > 3 ? params[3].get_int() : chainActive.Height();
 
     CAccount account = RPC_PARAM::GetUserAccount(*pCdMan->pAccountCache, txUid);
-    RPC_PARAM::CheckAccountBalance(account, SYMB::WICC, SUB_FREE, fee.GetSawiAmount());
+    RPC_PARAM::CheckAccountBalance(account, SYMB::WICC, SUB_FREE, fee.GetAmountInSawi());
+
+    if (fee.symbol != SYMB::WICC)
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "The fee symbol must be WICC");
 
     CDelegateVoteTx delegateVoteTx;
     delegateVoteTx.txUid        = txUid;
-    delegateVoteTx.llFees       = fee.GetSawiAmount();
+    delegateVoteTx.llFees       = fee.GetAmountInSawi();
     delegateVoteTx.valid_height = validHegiht;
 
     Array arrVotes = params[1].get_array();
@@ -506,15 +349,12 @@ Value submitdelegatevotetx(const Array& params, bool fHelp) {
         if (delegateAddr.type() == null_type || delegateVotes == null_type) {
             throw JSONRPCError(RPC_INVALID_PARAMETER, "Vote fund address error or fund value error");
         }
-        CKeyID delegateKeyId;
-        if (!RPC_PARAM::GetKeyId(delegateAddr, delegateKeyId)) {
-            throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Delegate address error");
-        }
+        auto delegateUid = RPC_PARAM::ParseUserIdByAddr(delegateAddr);
         CAccount delegateAcct;
-        if (!pCdMan->pAccountCache->GetAccount(CUserID(delegateKeyId), delegateAcct)) {
+        if (!pCdMan->pAccountCache->GetAccount(delegateUid, delegateAcct)) {
             throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Delegate address does not exist");
         }
-        if (!delegateAcct.HaveOwnerPubKey()) {
+        if (!delegateAcct.HasOwnerPubKey()) {
             throw JSONRPCError(RPC_WALLET_ERROR, "Delegate address is unregistered");
         }
 
@@ -533,10 +373,10 @@ Value submitdelegatevotetx(const Array& params, bool fHelp) {
 Value submitucontractdeploytx(const Array& params, bool fHelp) {
     if (fHelp || params.size() < 3 || params.size() > 5) {
         throw runtime_error(
-            "submitucontractdeploytx \"addr\" \"filepath\" \"symbol:fee:unit\" [\"height\"] [\"contract_memo\"]\n"
+            "submitucontractdeploytx \"sender\" \"filepath\" \"symbol:fee:unit\" [\"height\"] [\"contract_memo\"]\n"
             "\ncreate a transaction of registering a universal contract\n"
             "\nArguments:\n"
-            "1.\"addr\":            (string, required) contract owner address from this wallet\n"
+            "1.\"sender\":          (string, required) contract owner address from this wallet\n"
             "2.\"filepath\":        (string, required) the file path of the app script\n"
             "3.\"symbol:fee:unit\": (symbol:amount:unit, required) fee paid to miner, default is WICC:100000000:sawi\n"
             "4.\"height\":          (numeric, optional) valid height, when not specified, the tip block height in "
@@ -558,27 +398,27 @@ Value submitucontractdeploytx(const Array& params, bool fHelp) {
 
     EnsureWalletIsUnlocked();
 
-    const CUserID& txUid  = RPC_PARAM::GetUserId(params[0]);
+    const CUserID& txUid  = RPC_PARAM::GetUserId(params[0],true);
     string contractScript = RPC_PARAM::GetLuaContractScript(params[1]); // TODO: support universal contract script
     ComboMoney cmFee      = RPC_PARAM::GetFee(params, 2, UCONTRACT_DEPLOY_TX);
     int32_t validHegiht   = params.size() > 3 ? params[3].get_int() : chainActive.Height();
     string memo           = params.size() > 4 ? params[4].get_str() : "";
 
     if (!txUid.is<CRegID>())
-        throw JSONRPCError(RPC_INVALID_PARAMETER, "Regid does not exist or immature");
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "RegID not exist or immature");
 
     if (memo.size() > MAX_CONTRACT_MEMO_SIZE)
-        throw JSONRPCError(RPC_INVALID_PARAMETER, "Contract memo is too large");
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "Contract memo size too large");
 
     CAccount account = RPC_PARAM::GetUserAccount(*pCdMan->pAccountCache, txUid);
-    RPC_PARAM::CheckAccountBalance(account, cmFee.symbol, SUB_FREE, cmFee.GetSawiAmount());
+    RPC_PARAM::CheckAccountBalance(account, cmFee.symbol, SUB_FREE, cmFee.GetAmountInSawi());
 
     CUniversalContractDeployTx tx;
     tx.txUid        = txUid;
     tx.contract     = CUniversalContract(contractScript, memo);
     tx.fee_symbol   = cmFee.symbol;
-    tx.llFees       = cmFee.GetSawiAmount();
-    tx.nRunStep     = tx.contract.GetContractSize();
+    tx.llFees       = cmFee.GetAmountInSawi();
+    tx.fuel         = tx.contract.GetContractSize();
     tx.valid_height = validHegiht;
 
     return SubmitTx(account.keyid, tx);
@@ -621,7 +461,7 @@ Value submitucontractcalltx(const Array& params, bool fHelp) {
         throw JSONRPCError(RPC_INVALID_PARAMETER, "Invalid contract regid");
     }
 
-    if (!pCdMan->pContractCache->HaveContract(appRegId)) {
+    if (!pCdMan->pContractCache->HasContract(appRegId)) {
         throw JSONRPCError(RPC_INVALID_PARAMETER, "Failed to acquire contract");
     }
 
@@ -635,17 +475,17 @@ Value submitucontractcalltx(const Array& params, bool fHelp) {
     int32_t validHegiht = (params.size() > 5) ? params[5].get_int() : chainActive.Height();
 
     CAccount account = RPC_PARAM::GetUserAccount(*pCdMan->pAccountCache, txUid);
-    RPC_PARAM::CheckAccountBalance(account, cmCoin.symbol, SUB_FREE, cmCoin.GetSawiAmount());
-    RPC_PARAM::CheckAccountBalance(account, cmFee.symbol, SUB_FREE, cmFee.GetSawiAmount());
+    RPC_PARAM::CheckAccountBalance(account, cmCoin.symbol, SUB_FREE, cmCoin.GetAmountInSawi());
+    RPC_PARAM::CheckAccountBalance(account, cmFee.symbol, SUB_FREE, cmFee.GetAmountInSawi());
 
     CUniversalContractInvokeTx tx;
     tx.nTxType      = UCONTRACT_INVOKE_TX;
     tx.txUid        = txUid;
     tx.app_uid      = appUid;
     tx.coin_symbol  = cmCoin.symbol;
-    tx.coin_amount  = cmCoin.GetSawiAmount();
+    tx.coin_amount  = cmCoin.GetAmountInSawi();
     tx.fee_symbol   = cmFee.symbol;
-    tx.llFees       = cmFee.GetSawiAmount();
+    tx.llFees       = cmFee.GetAmountInSawi();
     tx.arguments    = arguments;
     tx.valid_height = validHegiht;
 
@@ -689,10 +529,12 @@ Value listaddr(const Array& params, bool fHelp) {
             for (auto tokenPair : account.tokens) {
                 Object tokenObj;
                 const CAccountToken& token = tokenPair.second;
+
                 tokenObj.push_back(Pair("free_amount",      token.free_amount));
                 tokenObj.push_back(Pair("staked_amount",    token.staked_amount));
                 tokenObj.push_back(Pair("frozen_amount",    token.frozen_amount));
                 tokenObj.push_back(Pair("voted_amount",     token.voted_amount));
+                tokenObj.push_back(Pair("pledged_amount",   token.pledged_amount));
 
                 tokenMapObj.push_back(Pair(tokenPair.first, tokenObj));
             }
@@ -708,7 +550,8 @@ Value listaddr(const Array& params, bool fHelp) {
 }
 
 Value listtx(const Array& params, bool fHelp) {
-if (fHelp || params.size() > 2) {
+
+    if (fHelp || params.size() > 2) {
         throw runtime_error("listtx\n"
                 "\nget all confirmed transactions and all unconfirmed transactions from wallet.\n"
                 "\nArguments:\n"
@@ -745,8 +588,8 @@ if (fHelp || params.size() > 2) {
     }
     bool bUpLimited = false;
     for (auto const &blockInfo : blockInfoMap) {
-        CAccountTx accountTx = pWalletMain->mapInBlockTx[blockInfo.second];
-        for (auto const & item : accountTx.mapAccountTx) {
+        CWalletAccountTxDb acctTxDb = pWalletMain->mapInBlockTx[blockInfo.second];
+        for (auto const & item : acctTxDb.account_tx_map) {
             if (nFrom-- > 0)
                 continue;
             if (++nCount > nDefCount) {
@@ -783,8 +626,7 @@ Value getaccountinfo(const Array& params, bool fHelp) {
             "{\n"
             "  \"address\": \"xxxxx\",       (string) the address\n"
             "  \"keyid\": \"xxxxx\",         (string) the keyid referred to the address\n"
-            "  \"nickid\": \"xxxxx\",        (string) the nickid referred to the address\n"
-            "  \"regid_mature\": true|false,   (bool) the nickid is mature or not\n"
+            "  \"regid_mature\": true|false,   (bool) whether regid is mature or not\n"
             "  \"regid\": \"xxxxx\",         (string) the regid referred to the address\n"
             "  \"regid_mature\": true|false,   (bool) the regid is mature or not\n"
             "  \"owner_pubkey\": \"xxxxx\",  (string) the public key referred to the address\n"
@@ -803,57 +645,53 @@ Value getaccountinfo(const Array& params, bool fHelp) {
 
     RPCTypeCheck(params, list_of(str_type));
     CKeyID keyid = RPC_PARAM::GetKeyId(params[0]);
-    CUserID userId;
-
-
-    userId = keyid;
+    const auto &addrStr = params[0].get_str();
+    CUserID userId = keyid;
     Object obj;
-    bool found = false;
-
     CAccount account;
+    bool on_chain = false;
+    bool pubkey_registered = false;
+    bool in_wallet = false;
+    uint32_t tipHeight = chainActive.Height();
+
     if (pCdMan->pAccountCache->GetAccount(userId, account)) {
-        if (!account.owner_pubkey.IsValid()) {
-            CPubKey pubKey;
-            CPubKey minerPubKey;
-            if (pWalletMain->GetPubKey(keyid, pubKey)) {
-                pWalletMain->GetPubKey(keyid, minerPubKey, true);
-                account.owner_pubkey = pubKey;
-                account.keyid        = pubKey.GetKeyId();
-                if (pubKey != minerPubKey && !account.miner_pubkey.IsValid()) {
-                    account.miner_pubkey = minerPubKey;
-                }
-            }
-        }
-        obj = account.ToJsonObj();
-        obj.push_back(Pair("position", "inblock"));
-
-        found = true;
-    } else {  // unregistered keyid
-        CPubKey pubKey;
-        CPubKey minerPubKey;
-        if (pWalletMain->GetPubKey(keyid, pubKey)) {
-            pWalletMain->GetPubKey(keyid, minerPubKey, true);
-            account.owner_pubkey = pubKey;
-            account.keyid        = pubKey.GetKeyId();
-            if (minerPubKey != pubKey) {
-                account.miner_pubkey = minerPubKey;
-            }
-            obj = account.ToJsonObj();
-            obj.push_back(Pair("position", "inwallet"));
-
-            found = true;
-        }
+        on_chain = true;
+        pubkey_registered = account.owner_pubkey.IsValid();
     }
 
-    if (found) {
-        // TODO: multi stable coin
-        uint64_t bcoinMedianPrice =
-            pCdMan->pBlockCache->GetMedianPrice(CoinPricePair(SYMB::WICC, SYMB::USD));
+    CPubKey pubKey_in_wallet;
+    if (pWalletMain->GetPubKey(keyid, pubKey_in_wallet)) {
+        in_wallet = true;
+        if (!pubkey_registered) {
+            account.owner_pubkey = pubKey_in_wallet;
+        }
+        if (!account.miner_pubkey.IsValid()) {
+            CPubKey miner_pubKey_in_wallet;
+            if (pWalletMain->GetPubKey(keyid, miner_pubKey_in_wallet, true)) {
+                account.miner_pubkey = miner_pubKey_in_wallet;
+            }
+        }
+        if (account.keyid.IsEmpty()) {
+            account.keyid        = pubKey_in_wallet.GetKeyId();
+        }
+    } else {
+        if (!on_chain) {
+            throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("account does not exist on chain and in wallet! addr=%s",
+                addrStr));
+        }
+    }
+    obj = account.ToJsonObj();
+    obj.push_back(Pair("onchain", on_chain));
+    obj.push_back(Pair("in_wallet", in_wallet));
+    obj.push_back(Pair("pubkey_registered", pubkey_registered));
+    obj.push_back(Pair("height", tipHeight));
+
+    if (on_chain && !account.regid.IsEmpty()) {
         Array cdps;
         vector<CUserCDP> userCdps;
         if (pCdMan->pCdpCache->GetCDPList(account.regid, userCdps)) {
             for (auto& cdp : userCdps) {
-                cdps.push_back(cdp.ToJson(bcoinMedianPrice));
+                cdps.push_back(RPC_PARAM::CdpToJson(cdp, tipHeight));
             }
         }
 
@@ -863,39 +701,12 @@ Value getaccountinfo(const Array& params, bool fHelp) {
     return obj;
 }
 
-static Value TestDisconnectBlock(int32_t number) {
-    CBlock block;
-    Object obj;
-
-    CValidationState state;
-    if (number >= chainActive.Height()) {
-        throw JSONRPCError(RPC_INVALID_PARAMETER, "Invalid number");
-    }
-    if (number > 0) {
-        do {
-            CBlockIndex * pTipIndex = chainActive.Tip();
-            if (!DisconnectBlockFromTip(state))
-                return false;
-            chainMostWork.SetTip(pTipIndex->pprev);
-            if (!EraseBlockIndexFromSet(pTipIndex))
-                return false;
-            if (!pCdMan->pBlockIndexDb->EraseBlockIndex(pTipIndex->GetBlockHash()))
-                return false;
-            mapBlockIndex.erase(pTipIndex->GetBlockHash());
-        } while (--number);
-    }
-
-    obj.push_back(
-        Pair("tip", strprintf("hash:%s hight:%s", chainActive.Tip()->GetBlockHash().ToString(), chainActive.Height())));
-    return obj;
-}
-
 Value disconnectblock(const Array& params, bool fHelp) {
     if (fHelp || params.size() != 1) {
         throw runtime_error("disconnectblock \"numbers\"\n"
                 "\ndisconnect block\n"
                 "\nArguments:\n"
-                "1. \"numbers \"  (numeric, required) the block numbers.\n"
+                "1. \"number \"  (numeric, required) the number of block(s) to be disconnected\n"
                 "\nResult:\n"
                 "\"disconnect result\"  (bool) \n"
                 "\nExamples:\n"
@@ -905,9 +716,33 @@ Value disconnectblock(const Array& params, bool fHelp) {
     }
     int32_t number = params[0].get_int();
 
-    Value te = TestDisconnectBlock(number);
 
-    return te;
+    if (number >= chainActive.Height())
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "Invalid number");
+
+    if (number > 0) {
+        CValidationState state;
+        do {
+            CBlockIndex * pTipIndex = chainActive.Tip();
+            if (!DisconnectTip(state))
+                throw JSONRPCError(RPC_MISC_ERROR, "DisconnectTip err");
+
+            chainMostWork.SetTip(pTipIndex->pprev);
+            if (!EraseBlockIndexFromSet(pTipIndex))
+                throw JSONRPCError(RPC_MISC_ERROR, "EraseBlockIndexFromSet err");
+
+            if (!pCdMan->pBlockIndexDb->EraseBlockIndex(pTipIndex->GetBlockHash()))
+                throw JSONRPCError(RPC_MISC_ERROR, "EraseBlockIndex err");
+
+            mapBlockIndex.erase(pTipIndex->GetBlockHash());
+        } while (--number);
+    }
+
+    Object obj;
+    obj.push_back(
+        Pair("tip", strprintf("hash:%s hight:%s", chainActive.Tip()->GetBlockHash().ToString(), chainActive.Height())));
+
+    return obj;
 }
 
 Value listcontracts(const Array& params, bool fHelp) {
@@ -925,17 +760,14 @@ Value listcontracts(const Array& params, bool fHelp) {
 
     bool showDetail = params[0].get_bool();
 
-    map<CRegIDKey, CUniversalContract> contracts;
-    if (!pCdMan->pContractCache->GetContracts(contracts)) {
-        throw JSONRPCError(RPC_DATABASE_ERROR, "Failed to acquire contracts from db.");
-    }
-
+    auto dbIt = MakeDbIterator(pCdMan->pContractCache->contractCache);
     Object obj;
     Array contractArray;
-    for (const auto &item : contracts) {
+    for (dbIt->First(); dbIt->IsValid(); dbIt->Next()) {
         Object contractObject;
-        const CUniversalContract &contract = item.second;
-        contractObject.push_back(Pair("contract_regid", item.first.regid.ToString()));
+        const auto &regidKey = dbIt->GetKey();
+        const CUniversalContractStore &contract = dbIt->GetValue();
+        contractObject.push_back(Pair("contract_regid", regidKey.ToString()));
         contractObject.push_back(Pair("memo",           contract.memo));
 
         if (showDetail) {
@@ -948,7 +780,7 @@ Value listcontracts(const Array& params, bool fHelp) {
         contractArray.push_back(contractObject);
     }
 
-    obj.push_back(Pair("count",     contracts.size()));
+    obj.push_back(Pair("count",     contractArray.size()));
     obj.push_back(Pair("contracts", contractArray));
 
     return obj;
@@ -967,22 +799,17 @@ Value getcontractinfo(const Array& params, bool fHelp) {
             HelpExampleRpc("getcontractinfo", "1-1"));
 
     CRegID regid(params[0].get_str());
-    if (regid.IsEmpty() || !pCdMan->pContractCache->HaveContract(regid)) {
+    if (regid.IsEmpty() || !pCdMan->pContractCache->HasContract(regid)) {
         throw JSONRPCError(RPC_INVALID_PARAMS, "Invalid contract regid.");
     }
 
-    CUniversalContract contract;
-    if (!pCdMan->pContractCache->GetContract(regid, contract)) {
+    CUniversalContractStore contractStore;
+    if (!pCdMan->pContractCache->GetContract(regid, contractStore)) {
         throw JSONRPCError(RPC_DATABASE_ERROR, "Failed to acquire contract from db.");
     }
 
-    Object obj;
-    obj.push_back(Pair("contract_regid",    regid.ToString()));
-    obj.push_back(Pair("vm_type",           contract.vm_type));
-    obj.push_back(Pair("upgradable",        contract.upgradable));
-    obj.push_back(Pair("code",              HexStr(contract.code)));
-    obj.push_back(Pair("memo",              contract.memo));
-    obj.push_back(Pair("abi",               contract.abi));
+    Object obj = contractStore.ToJson();
+    obj.insert(obj.begin(), Pair("contract_regid",    regid.ToString()));
 
     return obj;
 }
@@ -1036,10 +863,10 @@ Value reloadtxcache(const Array& params, bool fHelp) {
 Value getcontractdata(const Array& params, bool fHelp) {
     if (fHelp || (params.size() != 2 && params.size() != 3)) {
         throw runtime_error(
-            "getcontractdata \"contract regid\" \"key\" [hexadecimal]\n"
+            "getcontractdata \"contract_regid\" \"key\" [hexadecimal]\n"
             "\nget contract data with key\n"
             "\nArguments:\n"
-            "1.\"contract regid\":      (string, required) contract regid\n"
+            "1.\"contract_regid\":      (string, required) contract regid\n"
             "2.\"key\":                 (string, required)\n"
             "3.\"hexadecimal format\":  (boolean, optional) in hexadecimal if true, otherwise in plaintext, default to "
             "false\n"
@@ -1118,12 +945,20 @@ Value saveblocktofile(const Array& params, bool fHelp) {
 }
 
 Value submittxraw(const Array& params, bool fHelp) {
-    if (fHelp || params.size() != 1) {
+    if (fHelp || params.size() < 1 || params.size() > 2) {
         throw runtime_error(
-            "submittxraw \"rawtx\" \n"
+            "submittxraw \"rawtx\" [\"signatures\"]\n"
             "\nsubmit raw transaction (hex format)\n"
             "\nArguments:\n"
-            "1.\"rawtx\":   (string, required) The raw transaction\n"
+            "1. \"rawtx\":   (string, required) The raw signed transaction\n"
+            "2. \"signatures\"    (array, optional) A json array of signature info\n"
+            " [\n"
+            "   {\n"
+            "      \"addr\": \"address\" (string, required) address of the signature\n"
+            "      \"signature\": \"hex str\" (string, required) signature, hex format\n"
+            "   }\n"
+            "       ,...\n"
+            " ]\n"
             "\nExamples:\n" +
             HelpExampleCli("submittxraw",
                            "\"0b01848908020001145e3550cfae2422dce90a778b0954409b1c6ccc3a045749434382dbea93000457494343c"
@@ -1143,70 +978,84 @@ Value submittxraw(const Array& params, bool fHelp) {
 
     CDataStream stream(vch, SER_DISK, CLIENT_VERSION);
 
-    std::shared_ptr<CBaseTx> tx;
-    stream >> tx;
-    std::tuple<bool, string> ret;
-    ret = pWalletMain->CommitTx((CBaseTx *) tx.get());
-    if (!std::get<0>(ret))
-        throw JSONRPCError(RPC_WALLET_ERROR, "Submittxraw error: " + std::get<1>(ret));
+    std::shared_ptr<CBaseTx> pBaseTx;
+    stream >> pBaseTx;
+
+    if (params.size() > 1) {
+        Array sigArray = params[1].get_array();
+        // TxSignatureMap {keyid -> {account, pSignature} }
+        TxSignatureMap txSignatureMap = GetTxSignatureMap(*pBaseTx, *pCdMan->pAccountCache);
+        set<CKeyID> signedUser;
+
+        for (auto sigItemObj : sigArray) {
+            const Value& addrObj      = JSON::GetObjectFieldValue(sigItemObj, "addr");
+            auto uid            = RPC_PARAM::ParseUserIdByAddr(addrObj);
+            const Value& signatureObj     = JSON::GetObjectFieldValue(sigItemObj, "signature");
+            auto signature           = RPC_PARAM::GetSignature(signatureObj);
+            auto keyid = RPC_PARAM::GetUserKeyId(uid);
+            auto it = txSignatureMap.find(keyid);
+            if (it == txSignatureMap.end()) {
+                throw JSONRPCError(
+                    RPC_INVALID_PARAMETER,
+                    strprintf("The signature of the user=%s is not required in tx",
+                              addrObj.get_str()));
+            }
+            auto ret = signedUser.insert(keyid);
+            if (!ret.second) {
+                throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("duplicated signature of user=%s",
+                    addrObj.get_str()));
+            }
+            auto &signatureDest = *it->second.second;
+            signatureDest = signature;
+        }
+    }
+
+    CValidationState state(SysCfg().IsTxTrace());
+    if (!pWalletMain->CommitTx((CBaseTx *) pBaseTx.get(), state))
+        throw JSONRPCError(RPC_WALLET_ERROR,
+                           strprintf("CommitTx failed: code=%d, reason=%s", state.GetRejectCode(),
+                                     state.GetRejectReason()));
 
     Object obj;
-    obj.push_back(Pair("txid", std::get<1>(ret)));
+    obj.push_back( Pair("txid", pBaseTx->GetHash().ToString()) );
+    obj.push_back( Pair("tx_trace", *state.GetTrace()) );
     return obj;
 }
 
-class CTxMultiSigner {
-public:
-    struct SigningItem {
-        CUserID           uid;
-        UnsignedCharArray *pSignature;
-    };
-
-    struct Signedtem {
-        CKeyID keyid;
-        UnsignedCharArray *pSignature;
-    };
-
-private:
-    CBaseTx &tx;
-    set<CKeyID> &user_keyids;
-public:
-    vector<Signedtem> signed_list;
-
-    CTxMultiSigner(CBaseTx &txIn, set<CKeyID> &userKeyidsIn)
-        : tx(txIn), user_keyids(userKeyidsIn) {}
-
-    void Sign(vector<SigningItem> &signingList) {
-
-        vector<CKeyID> signingKeyids(signingList.size());
-        for (size_t i = 0; i < signingList.size(); i++) {
-            signingKeyids[i] = RPC_PARAM::GetUserKeyId(signingList[i].uid);
-        }
-
-        for (auto& keyid : user_keyids) {
-            bool found = false;
-            for (size_t i = 0; i < signingList.size(); i++) {
-                if (signingKeyids[i] == keyid) {
-                    signed_list.push_back({signingKeyids[i], signingList[i].pSignature});
-                    found = true;
-                }
-            }
-            if (!found) {
-                throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("the user address=%s is not in the signing list",
-                    keyid.ToAddress()));
-            }
-        }
-
-        const uint256 &txHash = tx.GetHash();
-        for (auto signedItem : signed_list) {
-            if (!pWalletMain->Sign(signedItem.keyid, txHash,
-                                    *signedItem.pSignature)) {
-                throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Sign failed! addr=%s",
-                    signedItem.keyid.ToString()));
-            }
-        }
+Value droptxfrommempool(const Array& params, bool fHelp) {
+    if (fHelp || params.size() != 1) {
+        throw runtime_error(
+            "droptxfrommempool \"txid\"\n"
+            "\ndrop tx from mem pool\n"
+            "\nArguments:\n"
+            "1.\"txid\":   (string, required) the txid of dropping tx\n"
+            "\nExamples:\n" +
+            HelpExampleCli("droptxfrommempool",
+                           "\"c5287324b89793fdf7fa97b6203dfd814b8358cfa31114078ea5981916d7a8ac\"") +
+            "\nAs json rpc call\n" +
+            HelpExampleRpc("droptxfrommempool",
+                           "\"c5287324b89793fdf7fa97b6203dfd814b8358cfa31114078ea5981916d7a8ac\""));
     }
-};
+
+    const string &txidStr = params[0].get_str();
+
+    uint256 txid = uint256S(txidStr);
+    if (txid.IsEmpty())
+        throw JSONRPCError(RPC_INVALID_PARAMS, "Invalid txid=" + txidStr);
+
+    mempool.Remove(txid);
+    mempool.ReScanMemPoolTx();
+    return Object();
+}
+
+static vector<uint8_t> SignTxHash(const CKeyID &keyId, const uint256 &hash) {
+    vector<uint8_t> signature;
+    if (!pWalletMain->Sign(keyId, hash, signature)) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Sign tx hash failed! addr=%s",
+            keyId.ToAddress()));
+    }
+    return signature;
+}
 
 Value signtxraw(const Array& params, bool fHelp) {
     if (fHelp || params.size() != 2) {
@@ -1215,7 +1064,7 @@ Value signtxraw(const Array& params, bool fHelp) {
             "\nsignature transaction\n"
             "\nArguments:\n"
             "1.\"str\": (string, required) Hex-format string, no longer than 65K in binary bytes\n"
-            "2.\"addr\": (string, required) A json array of WICC addresses\n"
+            "2.\"signers\": (array, required) A json array of WICC addresses\n"
             "[\n"
             "  \"address\"  (string) WICC address\n"
             "  ...,\n"
@@ -1246,60 +1095,48 @@ Value signtxraw(const Array& params, bool fHelp) {
         return Value::null;
     }
 
+    if (pBaseTx->IsRelayForbidden()) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Unsupport to sign tx=%s", pBaseTx->GetTxTypeName()));
+    }
+
     const Array& addresses = params[1].get_array();
-    if (pBaseTx.get()->nTxType != UCOIN_TRANSFER_MTX && addresses.size() != 1) {
-        throw JSONRPCError(RPC_INVALID_PARAMETER, "To many addresses provided");
+
+    if (addresses.empty()) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "address list is empty()");
     }
 
-    set<CKeyID> users;
-    for (uint32_t i = 0; i < addresses.size(); i++) {
-        CUserID uid = RPC_PARAM::ParseUserIdByAddr(addresses[i]);
-        users.insert(RPC_PARAM::GetUserKeyId(uid));
-    }
-
-    if (users.empty()) {
-        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "No valid address provided");
-    }
-
-    CTxMultiSigner signer(*pBaseTx, users);
-    switch (pBaseTx.get()->nTxType) {
-        case BLOCK_REWARD_TX:
-        case UCOIN_REWARD_TX:
-        case UCOIN_BLOCK_REWARD_TX: {
-            throw JSONRPCError(RPC_INVALID_PARAMETER, "Reward transation is forbidden");
-        }
-        case UCOIN_TRANSFER_MTX: {
-            CMulsigTx *pTx = dynamic_cast<CMulsigTx*>(pBaseTx.get());
-            vector<CTxMultiSigner::SigningItem> signingList;
-            for (auto& item : pTx->signaturePairs) {
-                signingList.push_back({CUserID(item.regid), &item.signature});
-            }
-            signer.Sign(signingList);
-            break;
-        }
-
-        case DEX_OPERATOR_ORDER_TX: {
-            dex::CDEXOperatorOrderTx *pTx = dynamic_cast<dex::CDEXOperatorOrderTx*>(pBaseTx.get());
-            vector<CTxMultiSigner::SigningItem> signingList = {
-                {pTx->txUid, &pTx->signature},
-                {pTx->operator_uid, &pTx->operator_signature},
-            };
-            signer.Sign(signingList);
-            break;
-        }
-        default: {
-            vector<CTxMultiSigner::SigningItem> signingList = {
-                {pBaseTx->txUid, &pBaseTx->signature}
-            };
-            signer.Sign(signingList);
-        }
-    }
+    // TxSignatureMap {keyid -> {account, pSignature} }
+    TxSignatureMap txSignatureMap = GetTxSignatureMap(*pBaseTx, *pCdMan->pAccountCache);
+    set<CKeyID> signedUser;
+    auto txid = pBaseTx->GetHash();
 
     Array signatureArray;
-    for (auto item : signer.signed_list) {
+    for (const auto &addrObj : addresses) {
+        auto uid            = RPC_PARAM::ParseUserIdByAddr(addrObj);
+        auto keyid = RPC_PARAM::GetUserKeyId(uid);
+
+        auto it = txSignatureMap.find(keyid);
+        if (it == txSignatureMap.end()) {
+            throw JSONRPCError(
+                RPC_INVALID_PARAMETER,
+                strprintf("The signature of the user=%s is not required in tx",
+                            addrObj.get_str()));
+        }
+        auto &account = it->second.first;
+
+        auto ret = signedUser.insert(keyid);
+        if (!ret.second) {
+            throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("duplicated signature of user, addr=%s, regid=%s",
+                account.keyid.ToAddress(), account.regid.ToString()));
+        }
+
+        auto &signatureDest = *it->second.second;
+        signatureDest = SignTxHash(keyid, txid);
+
         Object itemObj;
-        itemObj.push_back(Pair("addr", item.keyid.ToAddress()));
-        itemObj.push_back(Pair("signature", HexStr(*item.pSignature)));
+        itemObj.push_back(Pair("addr", account.keyid.ToAddress()));
+        itemObj.push_back(Pair("regid", account.regid.ToString()));
+        itemObj.push_back(Pair("signature", HexStr(signatureDest)));
         signatureArray.push_back(itemObj);
     }
 
@@ -1308,61 +1145,8 @@ Value signtxraw(const Array& params, bool fHelp) {
 
     Object obj;
     obj.push_back(Pair("rawtx", HexStr(ds.begin(), ds.end())));
+    obj.push_back(Pair("signed_count", (int64_t)signatureArray.size()));
     obj.push_back(Pair("signed_list", signatureArray));
-    return obj;
-}
-
-Value decodemulsigscript(const Array& params, bool fHelp) {
-    if (fHelp || params.size() != 1)
-        throw runtime_error(
-            "decodemulsigscript \"hex\"\n"
-            "\nDecode a hex-encoded script.\n"
-            "\nArguments:\n"
-            "1. \"hex\"     (string) the hex encoded mulsig script\n"
-            "\nResult:\n"
-            "{\n"
-            "  \"type\":\"type\", (string) The transaction type\n"
-            "  \"reqSigs\": n,    (numeric) The required signatures\n"
-            "  \"addr\",\"address\" (string) mulsig script address\n"
-            "  \"addresses\": [   (json array of string)\n"
-            "     \"address\"     (string) bitcoin address\n"
-            "     ,...\n"
-            "  ]\n"
-            "}\n"
-            "\nExamples:\n" +
-            HelpExampleCli("decodemulsigscript", "\"hexstring\"") +
-            HelpExampleRpc("decodemulsigscript", "\"hexstring\""));
-
-    RPCTypeCheck(params, list_of(str_type));
-
-    vector<uint8_t> multiScript = ParseHex(params[0].get_str());
-    if (multiScript.empty() || multiScript.size() > MAX_MULSIG_SCRIPT_SIZE) {
-        throw JSONRPCError(RPC_INVALID_PARAMETER, "Invalid script size");
-    }
-
-    CDataStream ds(multiScript, SER_DISK, CLIENT_VERSION);
-    CMulsigScript script;
-    try {
-        ds >> script;
-    } catch (std::exception& e) {
-        throw JSONRPCError(RPC_INVALID_PARAMETER, "Invalid script content");
-    }
-
-    CKeyID scriptId           = script.GetID();
-    int8_t required           = (int8_t)script.GetRequired();
-    std::set<CPubKey> pubKeys = script.GetPubKeys();
-
-    Array addressArray;
-    for (const auto& pubKey : pubKeys) {
-        addressArray.push_back(pubKey.GetKeyId().ToAddress());
-    }
-
-    Object obj;
-    obj.push_back(Pair("type", "mulsig"));
-    obj.push_back(Pair("req_sigs", required));
-    obj.push_back(Pair("addr", scriptId.ToAddress()));
-    obj.push_back(Pair("addresses", addressArray));
-
     return obj;
 }
 
@@ -1372,7 +1156,7 @@ Value decodetxraw(const Array& params, bool fHelp) {
             "decodetxraw \"hexstring\"\n"
             "\ndecode transaction\n"
             "\nArguments:\n"
-            "1.\"str\": (string, required) hexstring\n"
+            "1.\"rawtx\": (string, required) hexstring\n"
             "\nExamples:\n" +
             HelpExampleCli("decodetxraw",
                            "\"03015f020001025a0164cd10004630440220664de5ec373f44d2756a23d5267ab25f2"
@@ -1392,17 +1176,18 @@ Value decodetxraw(const Array& params, bool fHelp) {
     if (!pBaseTx.get()) {
         return obj;
     }
-    obj = pBaseTx->ToJson(*pCdMan->pAccountCache);
+    auto pCw = std::make_shared<CCacheWrapper>(pCdMan);
+    obj = pBaseTx->ToJson(*pCw);
     return obj;
 }
 
 Value getcontractaccountinfo(const Array& params, bool fHelp) {
     if (fHelp || (params.size() != 2 && params.size() != 3)) {
         throw runtime_error(
-            "getcontractaccountinfo \"contract regid\" \"account address or regid\""
+            "getcontractaccountinfo \"contract_regid\" \"account address or regid\""
             "\nget contract account info\n"
             "\nArguments:\n"
-            "1.\"contract regid\":              (string, required) contract regid\n"
+            "1.\"contract_regid\":              (string, required) contract regid\n"
             "2.\"account address or regid\":    (string, required) contract account address or its regid\n"
             "3.\"minconf\"                      (numeric, optional, default=1) Only include contract transactions "
             "confirmed\n"
@@ -1526,13 +1311,9 @@ Value validateaddr(const Array& params, bool fHelp) {
     }
 
     Object obj;
-
-    CKeyID keyid;
-    if (!RPC_PARAM::GetKeyId(params[0], keyid)) {
-        obj.push_back(Pair("is_valid", false));
-    } else {
-        obj.push_back(Pair("is_valid", true));
-    }
+    CKeyID keyid = RPC_PARAM::GetKeyId(params[0]);
+    obj.push_back(Pair("is_valid", true));
+    obj.push_back(Pair("addr", keyid.ToAddress()));
 
     return obj;
 }
@@ -1549,21 +1330,8 @@ Value gettotalcoins(const Array& params, bool fHelp) {
             HelpExampleCli("gettotalcoins", "") + "\nAs json rpc call\n" + HelpExampleRpc("gettotalcoins", ""));
     }
 
-    Object obj;
-
-    uint64_t totalRegIds(0);
-    uint64_t totalBCoins(0);
-    uint64_t totalSCoins(0);
-    uint64_t totalFCoins(0);
-    std::tie(totalRegIds, totalBCoins, totalSCoins, totalFCoins) = pCdMan->pAccountCache->TraverseAccount();
-    // auto [totalCoins, totalRegIds] = pCdMan->pAccountCache->TraverseAccount(); //C++17
-
-    obj.push_back(Pair("total_regids", totalRegIds));
-    obj.push_back(Pair("total_bcoins",  ValueFromAmount(totalBCoins)));
-    obj.push_back(Pair("total_scoins",  ValueFromAmount(totalSCoins)));
-    obj.push_back(Pair("total_fcoins",  ValueFromAmount(totalFCoins)));
-
-    return obj;
+    Object stats = pCdMan->pAccountCache->GetAccountDBStats();
+    return stats;
 }
 
 Value listdelegates(const Array& params, bool fHelp) {
@@ -1572,16 +1340,19 @@ Value listdelegates(const Array& params, bool fHelp) {
             "listdelegates \n"
             "\nreturns the specified number delegates by reversed order voting number.\n"
             "\nArguments:\n"
-            "1. number           (number, optional) the number of the delegates, default to all delegates.\n"
+            "1. count:           (number, optional) the count of the delegates, default to all delegates.\n"
             "\nResult:\n"
             "\nExamples:\n" +
             HelpExampleCli("listdelegates", "11") + "\nAs json rpc call\n" + HelpExampleRpc("listdelegates", "11"));
     }
 
-    int32_t delegateNum = (params.size() == 1) ? params[0].get_int() : IniCfg().GetTotalDelegateNum();
-    if (delegateNum < 1 || delegateNum > 11) {
+
+    int32_t defaultDelegateNum = pCdMan->pDelegateCache->GetActivedDelegateNum();
+
+    int32_t delegateNum = (params.size() == 1) ? params[0].get_int() : defaultDelegateNum;
+    if (delegateNum < 1 || delegateNum > defaultDelegateNum) {
         throw JSONRPCError(RPC_INVALID_PARAMETER,
-                           strprintf("Delegate number not between 1 and %u", IniCfg().GetTotalDelegateNum()));
+                           strprintf("Delegate number not between 1 and %u", defaultDelegateNum));
     }
 
     VoteDelegateVector delegates;
@@ -1589,17 +1360,21 @@ Value listdelegates(const Array& params, bool fHelp) {
         throw JSONRPCError(RPC_INTERNAL_ERROR, "get active delegates failed");
     }
 
-        Object obj;
+    Object obj;
     Array delegateArray;
 
     CAccount account;
+    int i = 0;
     for (const auto& delegate : delegates) {
+
         if (!pCdMan->pAccountCache->GetAccount(delegate.regid, account)) {
             throw JSONRPCError(RPC_INTERNAL_ERROR, "Failed to get account info");
         }
         Object accountObj = account.ToJsonObj();
         accountObj.push_back(Pair("active_votes", delegate.votes));
         delegateArray.push_back(accountObj);
+        if(++i == delegateNum)
+            break;
     }
 
     obj.push_back(Pair("delegates", delegateArray));

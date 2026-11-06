@@ -14,6 +14,8 @@ using namespace std;
 
 static const CRegID id; // to fix the link error: undefined reference to `CRegID ...
 
+static const uint32_t CACHE_SIZE = 50  << 10; // 50K
+
 struct FDBAccessTests {
     FDBAccessTests() {
         BOOST_TEST_MESSAGE( "setup FDBAccessTests" );
@@ -40,17 +42,33 @@ struct FDBAccessTests {
 BOOST_FIXTURE_TEST_SUITE(dbaccess_tests, FDBAccessTests)
 //BOOST_AUTO_TEST_SUITE(dbaccess_tests)
 
+
+template<typename KeyType, typename ValueType>
+void WriteBatch(CDBAccess &access, const dbk::PrefixType &prefixType, const map<KeyType, ValueType> &dataMap) {
+    CLevelDBBatch batch;
+    for (auto item : dataMap) {
+        string key = dbk::GenDbKey(prefixType, item.first);
+        if (db_util::IsEmpty(item.second)) {
+            batch.Erase(key);
+        } else {
+            batch.Write(key, item.second);
+        }
+    }
+    access.WriteBatch(batch);
+}
+
 BOOST_AUTO_TEST_CASE(dbaccess_test)
 {
     bool isWipe = true;
     shared_ptr<CDBAccess> pDBAccess = make_shared<CDBAccess>(
-        db_dir, DBNameType::ACCOUNT, false, isWipe);
+        DBNameType::ACCOUNT, db_dir, CACHE_SIZE, false, isWipe);
     const dbk::PrefixType prefix = dbk::REGID_KEYID;
-    map<string, string> mapData;
-    mapData["regid-1"] = "keyid-1";
-    mapData["regid-2"] = "keyid-2";
-    mapData["regid-3"] = "keyid-3";
-    pDBAccess->BatchWrite<string, string>(prefix, mapData);
+    map<string, string> dataMap;
+    dataMap["regid-1"] = "keyid-1";
+    dataMap["regid-2"] = "keyid-2";
+    dataMap["regid-3"] = "keyid-3";
+    WriteBatch(*pDBAccess, prefix, dataMap);
+
     string value1;
     BOOST_CHECK(pDBAccess->GetData(prefix, string("regid-1"), value1));
     BOOST_CHECK( value1 == "keyid-1" );
@@ -71,7 +89,7 @@ BOOST_AUTO_TEST_CASE(dbcache_multi_value_Level1_test)
     const bool isWipe = true;
     const dbk::PrefixType prefix = dbk::REGID_KEYID;
     shared_ptr<CDBAccess> pDBAccess = make_shared<CDBAccess>(
-        db_dir, DBNameType::ACCOUNT, false, isWipe);
+        DBNameType::ACCOUNT, db_dir, CACHE_SIZE, false, isWipe);
 
     auto pDBCache = make_shared< CCompositeKVCache<prefix, string, string> >(pDBAccess.get());
     pDBCache->SetData("regid-1", "keyid-1");
@@ -93,7 +111,7 @@ BOOST_AUTO_TEST_CASE(dbcache_multi_value_Level3_test)
     const bool isWipe = true;
     const dbk::PrefixType prefix = dbk::REGID_KEYID;
     shared_ptr<CDBAccess> pDBAccess = make_shared<CDBAccess>(
-        db_dir, DBNameType::ACCOUNT, false, isWipe);
+        DBNameType::ACCOUNT, db_dir, CACHE_SIZE, false, isWipe);
 
     auto pDBCache1 = make_shared< CCompositeKVCache<prefix, string, string> >(pDBAccess.get());
     auto pDBCache2 = make_shared< CCompositeKVCache<prefix, string, string> >(pDBCache1.get());
@@ -129,7 +147,7 @@ BOOST_AUTO_TEST_CASE(dbcache_scalar_value_Level3_test)
     const bool isWipe = true;
     const dbk::PrefixType prefix = dbk::REGID_KEYID;
     shared_ptr<CDBAccess> pDBAccess = make_shared<CDBAccess>(
-        db_dir, DBNameType::ACCOUNT, false, isWipe);
+        DBNameType::ACCOUNT, db_dir, CACHE_SIZE, false, isWipe);
 
     auto pDBCache1 = make_shared< CSimpleKVCache<prefix, string> >(pDBAccess.get());
     auto pDBCache2 = make_shared< CSimpleKVCache<prefix, string> >(pDBCache1.get());
@@ -152,8 +170,9 @@ static uint32_t GetSerSize(const T &t) {
 template <typename CacheType>
 static uint32_t GetCacheSerializeSize(CacheType &cache) {
     uint32_t ret = 0;
-    for (auto item : cache.GetMapData())
-        ret += GetSerSize(item);
+    for (auto item : cache.GetMapData()) {
+        ret += GetSerSize(item.first) + GetSerSize(*item.second);
+    }
     return ret;
 }
 
@@ -162,7 +181,7 @@ BOOST_AUTO_TEST_CASE(dbcache_cache_size_test)
     const bool isWipe = true;
     const dbk::PrefixType prefix = dbk::REGID_KEYID;
     shared_ptr<CDBAccess> pDBAccess = make_shared<CDBAccess>(
-        db_dir, DBNameType::ACCOUNT, false, isWipe);
+        DBNameType::ACCOUNT, db_dir, CACHE_SIZE, false, isWipe);
 
     auto pDBCache = make_shared< CCompositeKVCache<prefix, string, string> >(pDBAccess.get());
     pDBCache->SetData("regid-1", "keyid-1");

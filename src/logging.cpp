@@ -31,7 +31,7 @@ BCLog::Logger& LogInstance()
  * This method of initialization was originally introduced in
  * ee3374234c60aba2cc4c5cd5cac1c0aefc2d817c.
  */
-    static BCLog::Logger* g_logger{new BCLog::Logger()};
+    static std::unique_ptr<BCLog::Logger> g_logger = std::make_unique<BCLog::Logger>();
     return *g_logger;
 }
 
@@ -81,6 +81,15 @@ bool BCLog::Logger::StartLogging()
     return true;
 }
 
+void BCLog::Logger::Flush() {
+    if (Enabled()) {
+        std::lock_guard<std::mutex> scoped_lock(m_cs);
+        if (m_print_to_file && m_fileout != nullptr) {
+            fflush(m_fileout);
+        }
+    }
+}
+
 void BCLog::Logger::DisconnectTestLogger()
 {
     std::lock_guard<std::mutex> scoped_lock(m_cs);
@@ -128,7 +137,7 @@ uint64_t BCLog::Logger::GetCurrentLogSize() {
 
     if(file != nullptr)
         fclose(file);
-    return log_size ;
+    return log_size;
 
 }
 
@@ -173,7 +182,10 @@ static const EnumTypeMap<BCLog::LogFlags, std::string, uint32_t> LOG_CATEGORY_MA
     {BCLog::WALLET,     "WALLET"    },
     {BCLog::LIBEVENT,   "LIBEVENT"  },
     {BCLog::DEX,        "DEX"       },
-    {BCLog::ALL,        "1"         },
+    {BCLog::RPCCMD,     "RPCCMD"    },
+    {BCLog::DELEGATE,   "DELEGATE"  },
+    {BCLog::PBFT,       "PBFT"      },
+    {BCLog::BENCHMARK,  "BENCHMARK" },
     {BCLog::ALL,        "ALL"       },
 };
 
@@ -280,17 +292,31 @@ namespace BCLog {
 
 }
 
-void BCLog::Logger::LogPrintStr(const BCLog::LogFlags& category, const char* file, int line,
-    const std::string& str) {
-
+void BCLog::Logger::LogPrintStr(const BCLog::LogFlags& category, const char* file, int line, const char* func, const std::string& str) {
 
     std::lock_guard<std::mutex> scoped_lock(m_cs);
     std::string str_prefixed = LogEscapeMessage(str);
 
-    str_prefixed.insert(0, "[" + GetLogCategoryName(category) + "] ");
+    string s_file = string(file);
+    string s_func = string(func);
 
-    if (m_print_file_line)
-        str_prefixed.insert(0, tfm::format("[%s:%d] ", file, line));
+    if (m_print_file_line) {
+        string file_line = strprintf("%s:%d", s_file, line);
+
+        #ifndef VER_DEBUG
+        if (file_line.size() > 38)
+            file_line = strprintf("%s**%s", file_line.substr(0, 10), file_line.substr(file_line.size()-10, 10));
+
+        if (s_func.size() > 20)
+            s_func = s_func.substr(0, 20);
+        #endif
+
+        string file_line_func = strprintf("[%s %s]", file_line, s_func);
+        string log_cat = strprintf("[%s]", GetLogCategoryName(category));
+        string file_line_cat_func = strprintf("%-15s %-44s", log_cat, file_line_func);
+
+        str_prefixed.insert(0, tfm::format("%-80s ", file_line_cat_func));
+    }
 
     if (m_log_threadnames && m_started_new_line) {
         str_prefixed.insert(0, "[" + util::ThreadGetInternalName() + "] ");
@@ -333,7 +359,7 @@ void BCLog::Logger::LogPrintStr(const BCLog::LogFlags& category, const char* fil
 
         if(m_totoal_written_size > m_max_log_size){
             ShrinkDebugFile();
-            m_totoal_written_size = 0 ;
+            m_totoal_written_size = 0;
 
         }
 
@@ -344,8 +370,8 @@ void BCLog::Logger::ShrinkDebugFile()
 {
     assert(!m_file_path.empty());
     string new_path =  strprintf("%s%s",m_file_path.string(), ".1");
-    remove(new_path.c_str()) ;
-    rename(m_file_path.string().c_str(), new_path.c_str()) ;
-    m_reopen_file = true ;
+    remove(new_path.c_str());
+    rename(m_file_path.string().c_str(), new_path.c_str());
+    m_reopen_file = true;
 
 }

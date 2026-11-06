@@ -51,7 +51,16 @@ void CTxMemPool::Remove(CBaseTx *pBaseTx, list<std::shared_ptr<CBaseTx> > &remov
     if (memPoolTxs.count(txid)) {
         removed.push_front(std::shared_ptr<CBaseTx>(memPoolTxs[txid].GetTransaction()));
         memPoolTxs.erase(txid);
-        EraseTransaction(txid);
+        EraseTransactionFromWallet(txid);
+    }
+}
+
+void CTxMemPool::Remove(const uint256 &txid) {
+    LOCK(cs);
+    auto it = memPoolTxs.find(txid);
+    if (it != memPoolTxs.end()) {
+        memPoolTxs.erase(it);
+        EraseTransactionFromWallet(txid);
     }
 }
 
@@ -61,7 +70,7 @@ bool CTxMemPool::AddUnchecked(const uint256 &txid, const CTxMemPoolEntry &entry,
     // all the appropriate checks.
     LOCK(cs);
     {
-        if (!CheckTxInMemPool(txid, entry, state))
+        if (!CheckTxInMemPool(txid, entry, state, memPoolTxs.size()))
             return false;
 
         memPoolTxs.insert(make_pair(txid, entry));
@@ -79,29 +88,40 @@ void CTxMemPool::QueryHash(vector<uint256> &txids) {
     }
 }
 
-bool CTxMemPool::CheckTxInMemPool(const uint256 &txid, const CTxMemPoolEntry &memPoolEntry, CValidationState &state,
-                                  bool bExecute) {
-    // is it within valid height
-    static int validHeight = SysCfg().GetTxCacheHeight();
-    if (!memPoolEntry.GetTransaction()->IsValidHeight(chainActive.Height(), validHeight))
-        return state.Invalid(ERRORMSG("CheckTxInMemPool() : txid: %s beyond the scope of valid height", txid.GetHex()),
-                             REJECT_INVALID, "tx-invalid-height");
+bool CTxMemPool::CheckTxInMemPool(const uint256 &txid, const CTxMemPoolEntry &memPoolEntry, CValidationState &state, int32_t index,
+                                  bool bRehearsalExecute) {
+    auto bm = MAKE_BENCHMARK("execute tx in mempool");
+    CBlockIndex *pTip =  chainActive.Tip();
+    if (pTip == nullptr)
+        throw runtime_error("CheckTxInMemPool:: ChainActive.Tip() is null");
 
-    // is it already confirmed in block
-    if (cw->txCache.HaveTx(txid))
-        return state.Invalid(ERRORMSG("CheckTxInMemPool() : txid: %s has been confirmed", txid.GetHex()), REJECT_INVALID,
-                             "tx-duplicate-confirmed");
+    HeightType newHeight = pTip->height + 1;
+    // not within valid height
+    static int validHeight = SysCfg().GetTxCacheHeight();
+    auto &tx = *memPoolEntry.GetTransaction();
+    if (!tx.IsValidHeight(newHeight, validHeight)) {
+        LogPrint(BCLog::INFO, "valid_height(%d) of txid %s is invalid! new_height=%d\n", tx.valid_height, txid.GetHex(), newHeight);
+        return state.Invalid(false, REJECT_INVALID, "tx-invalid-height");
+    }
+
+    // already confirmed in block
+    if (cw->txCache.HasTx(txid)) {
+        LogPrint(BCLog::INFO, "txid %s confirmed in block\n", txid.GetHex());
+        return state.Invalid(false, REJECT_INVALID, "tx-duplicate-confirmed");
+    }
 
     auto spCW = std::make_shared<CCacheWrapper>(cw.get());
 
-    if (bExecute) {
-        CBlockIndex *pTip =  chainActive.Tip();
+    if (bRehearsalExecute) { //always true so far
+        const auto &bpRegid = GetBlockBpRegid(*chainActive.TipBlock());
         uint32_t fuelRate  = GetElementForBurn(pTip);
         uint32_t blockTime = pTip->GetBlockTime();
         uint32_t prevBlockTime = pTip->pprev != nullptr ? pTip->pprev->GetBlockTime() : pTip->GetBlockTime();
-        CTxExecuteContext context(chainActive.Height(), 0, fuelRate, blockTime, prevBlockTime, spCW.get(), &state, transaction_status_type::validating);
-        if (!memPoolEntry.GetTransaction()->ExecuteTx(context)) {
-            pCdMan->pLogCache->SetExecuteFail(chainActive.Height(), memPoolEntry.GetTransaction()->GetHash(),
+        CTxExecuteContext context(newHeight, index, fuelRate, blockTime, prevBlockTime, bpRegid, spCW.get(), &state,
+                                TxExecuteContextType::VALIDATE_MEMPOOL);
+
+        if (!tx.ExecuteFullTx(context)) { //rehearsal only within cache env
+            pCdMan->pLogCache->SetExecuteFail(newHeight, tx.GetHash(),
                                               state.GetRejectCode(), state.GetRejectReason());
             return false;
         }
@@ -117,15 +137,17 @@ void CTxMemPool::SetMemPoolCache() {
 }
 
 void CTxMemPool::ReScanMemPoolTx() {
+    auto bm = MAKE_BENCHMARK("rescan all tx in mempool");
     cw.reset(new CCacheWrapper(pCdMan));
 
     LOCK(cs);
     CValidationState state;
-    for (map<uint256, CTxMemPoolEntry>::iterator iterTx = memPoolTxs.begin(); iterTx != memPoolTxs.end();) {
-        if (!CheckTxInMemPool(iterTx->first, iterTx->second, state, true)) {
+    int index = 0;
+    for (map<uint256, CTxMemPoolEntry>::iterator iterTx = memPoolTxs.begin(); iterTx != memPoolTxs.end(); ++index) {
+        if (!CheckTxInMemPool(iterTx->first, iterTx->second, state, index, true)) {
             uint256 txid = iterTx->first;
             iterTx       = memPoolTxs.erase(iterTx++);
-            EraseTransaction(txid);
+            EraseTransactionFromWallet(txid);
             continue;
         }
         ++iterTx;

@@ -27,8 +27,6 @@
 #include "config/errorcode.h"
 #include "chain/chain.h"
 #include "chain/merkletree.h"
-#include "net.h"
-#include "p2p/node.h"
 #include "persistence/cachewrapper.h"
 #include "sigcache.h"
 #include "tx/tx.h"
@@ -41,7 +39,7 @@ class CInv;
 
 extern CCriticalSection cs_main;
 /** The currently-connected chain of blocks. */
-extern CChain chainActive;
+extern CChainActive chainActive;
 extern CSignatureCache signatureCache;
 
 extern CTxMemPool mempool;
@@ -49,7 +47,6 @@ extern map<uint256, CBlockIndex *> mapBlockIndex;
 extern uint64_t nLastBlockTx;
 extern uint64_t nLastBlockSize;
 extern const string strMessageMagic;
-extern bool ReadBlockFromDisk(const CBlockIndex *pIndex, CBlock &block) ;
 
 extern bool mining;     // could be changed due to vote change
 extern CKeyID minerKeyId;  // miner accout keyId
@@ -59,22 +56,9 @@ class CValidationState;
 class CWalletInterface;
 
 struct CNodeStateStats;
+struct CNodeSignals;
 
-namespace {
-struct CMainSignals {
-    // Notifies listeners of updated transaction data (passing hash, transaction, and optionally the block it is found
-    // in.
-    boost::signals2::signal<void(const uint256 &, CBaseTx *, const CBlock *)> SyncTransaction;
-    // Notifies listeners of an erased transaction (currently disabled, requires transaction replacement).
-    boost::signals2::signal<void(const uint256 &)> EraseTransaction;
-    // Notifies listeners of a new active block chain.
-    boost::signals2::signal<void(const CBlockLocator &)> SetBestChain;
-    // Notifies listeners about an inventory item being seen on the network.
-    // boost::signals2::signal<void (const uint256 &)> Inventory;
-    // Tells listeners to broadcast their data.
-    boost::signals2::signal<void()> Broadcast;
-} g_signals;
-}  // namespace
+typedef int32_t NodeId;
 
 /** Register a wallet to receive updates from core */
 void RegisterWallet(CWalletInterface *pWalletIn);
@@ -85,7 +69,7 @@ void UnregisterAllWallets();
 /** Push an updated transaction to all registered wallets */
 void SyncTransaction(const uint256 &hash, CBaseTx *pBaseTx, const CBlock *pBlock = nullptr);
 /** Erase Tx from wallets **/
-void EraseTransaction(const uint256 &hash);
+void EraseTransactionFromWallet(const uint256 &hash);
 /** Register with a network node to receive its signals */
 void RegisterNodeSignals(CNodeSignals &nodeSignals);
 /** Unregister a network node */
@@ -137,16 +121,23 @@ private:
         MODE_VALID,    // everything ok
         MODE_INVALID,  // network rule violation (DoS value may be set)
         MODE_ERROR,    // run-time error
-    } mode;
-    int32_t nDoS;
+    };
+    mode_state mode = MODE_VALID;
+    int32_t nDoS = 0;
     string rejectReason;
-    uint8_t rejectCode;
-    bool corruptionPossible;
+    uint8_t rejectCode = 0;
+    bool corruptionPossible = false;
 
     string ret;
 
+    std::optional<json_spirit::Value> opt_trace;
+
 public:
-    CValidationState() : mode(MODE_VALID), nDoS(0), corruptionPossible(false) {}
+    CValidationState() {}
+    CValidationState(bool isTrace) {
+        if (isTrace) opt_trace = json_spirit::Value();
+    }
+
     bool DoS(int32_t level, bool ret = false, uint8_t rejectCodeIn = 0, string rejectReasonIn = "",
              bool corruptionIn = false) {
         rejectCode         = rejectCodeIn;
@@ -187,6 +178,9 @@ public:
 
     void SetReturn(std::string r) {ret = r;}
     std::string GetReturn() {return ret;}
+
+    const std::optional<json_spirit::Value>& GetTrace() const { return opt_trace; }
+    std::optional<json_spirit::Value>& GetTrace() { return opt_trace; }
 };
 
 /** The currently best known chain of headers (some of which may be invalid). */
@@ -233,7 +227,7 @@ bool ProcessForkedChain(const CBlock &block, CValidationState &state);
 bool AcceptBlock(CBlock &block, CValidationState &state, CDiskBlockPos *dbp = nullptr, bool mining = false);
 
 //disconnect block for test
-bool DisconnectBlockFromTip(CValidationState &state);
+bool DisconnectTip(CValidationState &state);
 
 /** Mark a block as invalid. */
 bool InvalidateBlock(CValidationState &state, CBlockIndex *pIndex);
@@ -261,6 +255,6 @@ void UpdateTime(CBlockHeader &block, const CBlockIndex *pIndexPrev);
 bool ActivateBestChain(CValidationState &state, CBlockIndex* pNewIndex = nullptr);
 
 /** Remove invalidity status from a block and its descendants. */
-bool ReconsiderBlock(CValidationState &state, CBlockIndex *pIndex);
+bool ReconsiderBlock(CValidationState &state, CBlockIndex *pIndex, bool children);
 
 #endif

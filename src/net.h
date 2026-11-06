@@ -22,11 +22,12 @@
 
 #include <openssl/rand.h>
 #include <boost/foreach.hpp>
+#include <boost/thread.hpp>
 
 class CAddrMan;
 class CBlockIndex;
 class CNode;
-class LocalServiceInfo ;
+class LocalServiceInfo;
 class CInv;
 
 //p2p_xiaoyu_20191126

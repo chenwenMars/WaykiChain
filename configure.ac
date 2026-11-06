@@ -1,11 +1,12 @@
 dnl require autoconf 2.60 (AS_ECHO/AS_ECHO_N)
-AC_PREREQ([2.60])
-define(_CLIENT_VERSION_MAJOR,       2)
-define(_CLIENT_VERSION_MINOR,       2)
+define(_CLIENT_VERSION_MAJOR,       3)
+define(_CLIENT_VERSION_MINOR,       5)
 define(_CLIENT_VERSION_REVISION,    1)
-define(_CLIENT_VERSION_BUILD,       1)
+define(_CLIENT_VERSION_BUILD,       0)
 define(_CLIENT_VERSION_IS_RELEASE,  true)
-define(_COPYRIGHT_YEAR, 2019)
+define(_COPYRIGHT_YEAR, 2020)
+
+AC_PREREQ([2.60])
 AC_INIT([Coin Core],[_CLIENT_VERSION_MAJOR._CLIENT_VERSION_MINOR._CLIENT_VERSION_REVISION],[info@waykichainhk.com],[Coin])
 AC_CONFIG_AUX_DIR([src/build-aux])
 AC_CONFIG_MACRO_DIR([src/m4])
@@ -13,6 +14,9 @@ AC_CANONICAL_HOST
 AH_TOP([#ifndef COIN_CONFIG_H])
 AH_TOP([#define COIN_CONFIG_H])
 AH_BOTTOM([#endif //COIN_CONFIG_H])
+
+# Silence warning: ar: 'u' modifier ignored since 'D' is the default
+AC_SUBST(ARFLAGS, [cr])
 
 # This m4 will only be used if a system copy cannot be found. This is helpful
 # on systems where autotools are installed but the pkg-config macros are not in
@@ -123,6 +127,10 @@ AC_ARG_ENABLE([glibc-back-compat],
   [use_glibc_compat=$enableval],
   [use_glibc_compat=no])
 
+AC_ARG_ENABLE(gperftools,
+    AS_HELP_STRING([--enable-gperftools],[gperftools (default is no)]),
+    [use_gperftools=$enableval],
+    [use_gperftools=no])
 
 AC_CONFIG_SRCDIR([src])
 AC_CONFIG_HEADERS([src/config/coin-config.h])
@@ -160,11 +168,11 @@ AC_ARG_ENABLE([debug],
 
 if test "x$enable_debug" = xyes; then
     if test "x$GCC" = xyes; then
-        CFLAGS="-g3 -O0"
+        CFLAGS="-g3 -O0 -DVER_DEBUG"
     fi
 
     if test "x$GXX" = xyes; then
-        CXXFLAGS="-g3 -O0"
+        CXXFLAGS="-g3 -O0 -DVER_DEBUG"
     fi
 fi
 
@@ -442,6 +450,7 @@ AX_BOOST_FILESYSTEM
 AX_BOOST_PROGRAM_OPTIONS
 AX_BOOST_THREAD
 AX_BOOST_CHRONO
+AX_BOOST_DATE_TIME
 
 if test x$use_tests = xyes || test x$use_ptests = xyes || test x$use_unit_tests = xyes; then
 
@@ -471,7 +480,7 @@ if test x$use_tests = xyes || test x$use_ptests = xyes || test x$use_unit_tests 
   CPPFLAGS="$TEMP_CPPFLAGS"
 fi
 
-BOOST_LIBS="$BOOST_LDFLAGS $BOOST_SYSTEM_LIB $BOOST_FILESYSTEM_LIB $BOOST_PROGRAM_OPTIONS_LIB $BOOST_THREAD_LIB"
+BOOST_LIBS="$BOOST_LDFLAGS $BOOST_SYSTEM_LIB $BOOST_FILESYSTEM_LIB $BOOST_PROGRAM_OPTIONS_LIB $BOOST_THREAD_LIB $BOOST_DATE_TIME_LIB"
 BOOST_INCLUDES="$BOOST_CPPFLAGS"
 
 dnl Boost >= 1.50 uses sleep_for rather than the now-deprecated sleep, however
@@ -529,6 +538,24 @@ fi
 
 if test x$boost_sleep != xyes; then
   AC_MSG_ERROR(No working boost sleep implementation found. If on ubuntu 13.10 with libboost1.54-all-dev remove libboost.1.54-all-dev and use libboost1.53-all-dev)
+fi
+
+dnl Check for gperftools (optional)
+AC_MSG_CHECKING([whether to enable gperftools])
+AC_MSG_RESULT($use_gperftools)
+if test x$use_gperftools != xno; then
+  AC_CHECK_HEADERS(
+    [gperftools/heap-profiler.h],
+    [AC_CHECK_LIB([tcmalloc], [main],, [have_tcmalloc=no])],
+    [have_tcmalloc=no]
+  )
+  if test x$have_tcmalloc = xno; then
+    AC_MSG_ERROR("gperftools not installed")
+  else
+    LIBS = "$LIBS -ltcmalloc"
+    CPPFLAGS="$CPPFLAGS -DENABLE_GPERFTOOLS"
+    CFLAGS="$CFLAGS -DENABLE_GPERFTOOLS"
+  fi
 fi
 
 AC_ARG_WITH([cli],

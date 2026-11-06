@@ -28,12 +28,6 @@ CAppCFund::CAppCFund() {
     timeoutHeight = 0;
 }
 
-CAppCFund::CAppCFund(const CAppCFund& fund) {
-    vTag          = fund.GetTag();
-    value         = fund.GetValue();
-    timeoutHeight = fund.GetHeight();
-}
-
 CAppCFund::CAppCFund(const vector<uint8_t>& tag, uint64_t val, int32_t height) {
     vTag          = tag;
     value         = val;
@@ -196,7 +190,7 @@ bool CAppUserAccount::Operate(const CAppFundOperate& operate, vector<CReceipt> &
 
         bcoins = tempValue;
 
-        receipts.emplace_back(nullId, operate.GetUserID(), "", operate.GetUint64Value(), ReceiptCode::CONTRACT_TOKEN_OPERATE_ADD);
+        receipts.emplace_back(ReceiptType::CONTRACT_TOKEN_OPERATE_ADD, BalanceOpType::ADD_FREE, nullId, operate.GetUserID(), "", operate.GetUint64Value());
 
         return true;
     } else if (operate.opType == SUB_FREE_OP) {
@@ -204,17 +198,17 @@ bool CAppUserAccount::Operate(const CAppFundOperate& operate, vector<CReceipt> &
         if (bcoins >= tem) {
             bcoins -= tem;
 
-            receipts.emplace_back(operate.GetUserID(), nullId, "", operate.GetUint64Value(), ReceiptCode::CONTRACT_TOKEN_OPERATE_SUB);
+            receipts.emplace_back(ReceiptType::CONTRACT_TOKEN_OPERATE_SUB, BalanceOpType::SUB_FREE, operate.GetUserID(), nullId, "", operate.GetUint64Value());
 
             return true;
         }
     } else if (operate.opType == ADD_TAG_OP) {
-        receipts.emplace_back(nullId, operate.GetUserID(), operate.GetFundTag(), operate.GetUint64Value(), ReceiptCode::CONTRACT_TOKEN_OPERATE_TAG_ADD);
+        receipts.emplace_back(ReceiptType::CONTRACT_TOKEN_OPERATE_TAG_ADD, BalanceOpType::ADD_FREE, nullId, operate.GetUserID(), operate.GetFundTag(), operate.GetUint64Value());
 
         CAppCFund tep(operate);
         return AddAppCFund(tep);
     } else if (operate.opType == SUB_TAG_OP) {
-        receipts.emplace_back(operate.GetUserID(), nullId, operate.GetFundTag(), operate.GetUint64Value(), ReceiptCode::CONTRACT_TOKEN_OPERATE_TAG_SUB);
+        receipts.emplace_back(ReceiptType::CONTRACT_TOKEN_OPERATE_TAG_SUB, BalanceOpType::SUB_FREE, operate.GetUserID(), nullId, operate.GetFundTag(), operate.GetUint64Value());
 
         CAppCFund tep(operate);
         return MinusAppCFund(tep);
@@ -235,7 +229,7 @@ CAppFundOperate::CAppFundOperate() {
 
 Object CAppCFund::ToJson() const {
     Object result;
-    result.push_back(Pair("value",          value));
+    result.push_back(Pair("value",          JsonValueFromAmount(value)));
     result.push_back(Pair("timeout_height", timeoutHeight));
     result.push_back(Pair("tag",            HexStr(vTag)));
 
@@ -247,7 +241,7 @@ string CAppCFund::ToString() const { return write_string(Value(ToJson()), true);
 Object CAppUserAccount::ToJson() const {
     Object result;
     result.push_back(Pair("account_uid",    HexStr(user_id)));
-    result.push_back(Pair("free_value",     bcoins));
+    result.push_back(Pair("free_value",     JsonValueFromAmount(bcoins)));
 
     Array array;
     for (auto const te : frozen_funds) {
@@ -275,7 +269,7 @@ Object CAppFundOperate::ToJson() const {
     result.push_back(Pair("vTag",       HexStr(GetFundTagV())));
     result.push_back(Pair("opType",     opTypes[opType]));
     result.push_back(Pair("outHeight",  (int32_t)timeoutHeight));
-    result.push_back(Pair("mMoney",     mMoney));
+    result.push_back(Pair("mMoney",     JsonValueFromAmount(mMoney)));
 
     return result;
 }

@@ -48,7 +48,11 @@ namespace wasm_chain {
 	exception::~exception(){}
 
 	const char*  exception::name()const throw() { return _name.c_str(); }
-	const char*  exception::what()const throw() { return _what.c_str(); }
+	const char*  exception::what()const throw() {
+		// for be compactable with std::exception
+		_what_detail = to_detail_string();
+		return _what_detail.c_str();
+	}
 	int64_t      exception::code()const throw() { return _code;         }
 
 	const log_messages& exception::get_log()const              { return _elog;                   }
@@ -60,7 +64,7 @@ namespace wasm_chain {
 		std::stringstream ss;
 		try {
 			try {
-				ss << "\n(" << _code << ")" ;
+				ss << "\n(" << _code << ")";
 			} catch( std::bad_alloc& ) {
 				throw;
 			} catch( ... ) {
@@ -75,11 +79,11 @@ namespace wasm_chain {
 					string context_str = itr->get_context().to_string();
 					std::ostringstream o;
 					o << itr->get_context().to_string();
-				    while (o.str().size() < CHAIN_CONTEXT_PRINT_LENGTH) 
-       					 o << " "; 
+				    while (o.str().size() < CHAIN_CONTEXT_PRINT_LENGTH)
+       					 o << " ";
 
 					//ss << itr->get_context().to_string();
-       			    ss << o.str();
+       			    ss << o.str() << ": ";
 					ss << itr->get_message();
 					++itr;
 				} catch( std::bad_alloc& ) {
@@ -126,7 +130,7 @@ namespace wasm_chain {
 		} catch( ... ) {
 			ss << "<- exception in to_string.\n";
 		}
-		return ss.str();		
+		return ss.str();
 	}
 
 	string exception::top_message()const
@@ -141,15 +145,21 @@ namespace wasm_chain {
 		return string();
 	}
 
-	exception& exception::operator=( const exception& copy )
+	exception& exception::operator=( const exception& other )
 	{
-	    *this = copy;
+		_name = other._name;
+		_what = other._what;
+		_code = other._code;
+		_elog = other._elog;
 	    return *this;
 	}
 
-	exception& exception::operator=( exception&& copy )
+	exception& exception::operator=( exception&& other )
 	{
-	    *this = std::move(copy);
+		_name = std::move(other._name);
+		_what = std::move(other._what);
+		_code = std::move(other._code);
+		_elog = std::move(other._elog);
 	    return *this;
 	}
 
@@ -157,8 +167,8 @@ namespace wasm_chain {
 	:exception( std::move(m) )
 	{
 	    _inner = e;
-	} 
-	
+	}
+
 	unhandled_exception::unhandled_exception( const exception& r )
 	:exception(r)
 	{

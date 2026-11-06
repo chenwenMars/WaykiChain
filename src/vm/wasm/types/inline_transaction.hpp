@@ -18,7 +18,7 @@ namespace wasm {
         vector<uint8_t>   signature;
 
         IMPLEMENT_SERIALIZE (
-            READWRITE(VARINT(account ));
+            READWRITE(VARINT(account));
             READWRITE(signature);
             )
 
@@ -29,14 +29,14 @@ namespace wasm {
     struct permission {
         uint64_t account;
         uint64_t perm;
-        
+
         IMPLEMENT_SERIALIZE (
-            READWRITE(VARINT(account) );
+            READWRITE(VARINT(account));
             READWRITE(VARINT(perm));
-            )
+        )
 
         bool operator == ( const permission& p )
-        { 
+        {
             return account == p.account && perm == p.perm;
         }
 
@@ -48,14 +48,14 @@ namespace wasm {
         uint64_t                 contract;
         uint64_t                 action;
         std::vector <permission> authorization;
-        std::vector<char>        data;
+        std::vector <char>       data;
 
         IMPLEMENT_SERIALIZE (
-            READWRITE(VARINT(contract ));
-            READWRITE(VARINT(action ));
+            READWRITE(VARINT(contract));
+            READWRITE(VARINT(action));
             READWRITE(authorization);
             READWRITE(data);
-            )
+        )
 
         WASM_REFLECT( inline_transaction, (contract)(action)(authorization)(data) )
 

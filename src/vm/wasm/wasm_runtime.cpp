@@ -1,10 +1,10 @@
 #pragma GCC diagnostic ignored "-Wunused-variable"
 
-#include"wasm/wasm_runtime.hpp"
-#include"eosio/vm/watchdog.hpp"
-#include"wasm/wasm_log.hpp"
+#include "wasm/wasm_runtime.hpp"
+#include "eosio/vm/watchdog.hpp"
+#include "wasm/wasm_log.hpp"
 #include "wasm/exception/exceptions.hpp"
-
+#include "commons/util/util.h"
 
 using namespace eosio;
 using namespace eosio::vm;
@@ -28,6 +28,8 @@ namespace wasm {
 
         void apply(wasm::wasm_context_interface *pContext) override {
 
+
+            auto bm_wasm_init = MAKE_BENCHMARK("execute wasm vm -- init");
             //WASM_TRACE("receiver:%d contract:%d action:%d",pContext->receiver(), pContext->contract(), pContext->action() )
             _instantiated_module->set_wasm_allocator(pContext->get_wasm_allocator());
             _runtime->_bkend = _instantiated_module.get();
@@ -48,12 +50,16 @@ namespace wasm {
                         pContext->contract(),
                         pContext->action());
             };
+            if (bm_wasm_init) bm_wasm_init->end();
+
+            auto bm_wasm_run = MAKE_BENCHMARK("execute wasm vm -- run");
             try {
                 watchdog wd(pContext->get_max_transaction_duration());
                 _runtime->_bkend->timed_run(wd, fn);
             } catch (vm::timeout_exception &) {
                 CHAIN_THROW(wasm_chain::wasm_timeout_exception, "timeout exception");
             } catch (vm::wasm_memory_exception &e) {
+                WASM_TRACE("%s", "access violation")
                 CHAIN_THROW(wasm_chain::wasm_memory_exception, "access violation");
             } catch ( vm::exception &e ) {
                 // FIXME: Do better translation

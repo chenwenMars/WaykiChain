@@ -119,7 +119,7 @@ Value importwallet(const Array& params, bool fHelp) {
             string strKeyId = find_value(keyItem.get_obj(), "keyid").get_str();
             CKeyID keyId(uint160(ParseHex(strKeyId)));
             keyCombi.UnSerializeFromJson(keyItem.get_obj());
-            if (!keyCombi.HaveMainKey() && !keyCombi.HaveMinerKey())
+            if (!keyCombi.HasMainKey() && !keyCombi.HaveMinerKey())
                 continue;
 
             if (pWalletMain->AddKey(keyId, keyCombi))
@@ -149,24 +149,23 @@ Value dumpprivkey(const Array& params, bool fHelp) {
 
     EnsureWalletIsUnlocked();
 
-    CUserID uid = RPC_PARAM::GetUserId(params[0], true);
-    CKeyID keyId = uid.get<CKeyID>();
+    auto keyid = RPC_PARAM::GetKeyId(params[0]);
 
     CKey vchSecret;
-    if (!pWalletMain->GetKey(keyId, vchSecret))
-        throw JSONRPCError(RPC_WALLET_ERROR, "Private key for uid " + uid.ToString() + " is not known.");
+    if (!pWalletMain->GetKey(keyid, vchSecret))
+        throw JSONRPCError(RPC_WALLET_ERROR, "Private key for uid " + params[0].get_str() + " is not known.");
+
+    Object ret;
+    ret.push_back(Pair("privkey", CCoinSecret(vchSecret).ToString()));
 
     CKey minerkey;
-	pWalletMain->GetKey(keyId, minerkey, true);
-    Object reply;
-    	reply.push_back(Pair("privkey", CCoinSecret(vchSecret).ToString()));
-
+	pWalletMain->GetKey(keyid, minerkey, true);
     if (minerkey.IsValid() && minerkey.ToString() != vchSecret.ToString())
-    	reply.push_back(Pair("minerkey", CCoinSecret(minerkey).ToString()));
+    	ret.push_back(Pair("minerkey", CCoinSecret(minerkey).ToString()));
     else
-    	reply.push_back(Pair("minerkey", "null"));
+    	ret.push_back(Pair("minerkey", "null"));
 
-    return reply;
+    return ret;
 }
 
 // TODO: enable rescan wallet.

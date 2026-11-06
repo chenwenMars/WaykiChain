@@ -6,24 +6,36 @@
 #include "txutxodb.h"
 #include "config/chainparams.h"
 
-bool CTxUTXODBCache::SetUtxoTx(const TxID &txid, const uint64_t &blockHeight, const CCoinUTXOTx &utxo) {
-    return txUtxoCache.SetData(txid, std::make_tuple(blockHeight, utxo));
+//////////////////////////////////
+//// UTXO Cache
+/////////////////////////////////
+bool CTxUTXODBCache::SetUtxoTx(const pair<TxID, CFixedUInt16> &utxoKey) {
+    return tx_utxo_cache.SetData(utxoKey, 1);
 }
 
-bool CTxUTXODBCache::GetUtxoTx(const TxID &txid, uint64_t &blockHeight, CCoinUTXOTx &utxo) {
-    std::tuple<uint64_t, CCoinUTXOTx> data;
-    bool result = txUtxoCache.GetData(txid, data);
+bool CTxUTXODBCache::GetUtxoTx(const pair<TxID, CFixedUInt16> &utxoKey) {
+    uint8_t data;
+    bool result = tx_utxo_cache.GetData(utxoKey, data);
     if (!result)
         return false;
     
-    blockHeight = get<0>(data);
-    utxo = get<1>(data);
-
     return true;
 }
-
-bool CTxUTXODBCache::DelUtoxTx(const TxID &txid) {
-    return txUtxoCache.EraseData(txid);
+bool CTxUTXODBCache::DelUtoxTx(const pair<TxID, CFixedUInt16> &utxoKey) {
+    return tx_utxo_cache.EraseData(utxoKey);
 }
 
-void CTxUTXODBCache::Flush() { txUtxoCache.Flush(); }
+//////////////////////////////////
+//// Password Proof Cache
+/////////////////////////////////
+bool CTxUTXODBCache::SetUtxoPasswordProof(const tuple<TxID, CFixedUInt16, CRegIDKey> &proofKey, uint256 &proof) {
+    return tx_utxo_password_proof_cache.SetData(proofKey, proof);
+}
+
+bool CTxUTXODBCache::GetUtxoPasswordProof(const tuple<TxID, CFixedUInt16, CRegIDKey> &proofKey, uint256 &proof) {
+    return tx_utxo_password_proof_cache.GetData(proofKey, proof);
+}
+
+bool CTxUTXODBCache::DelUtoxPasswordProof(const tuple<TxID, CFixedUInt16, CRegIDKey> &proofKey) {
+    return tx_utxo_password_proof_cache.EraseData(proofKey);
+}

@@ -215,7 +215,7 @@ Value getminedblocks(const Array& params, bool fHelp) {
         obj.push_back(Pair("time",          blockInfo.time));
         obj.push_back(Pair("nonce",         blockInfo.nonce));
         obj.push_back(Pair("height",        blockInfo.height));
-        obj.push_back(Pair("total_fuels",   blockInfo.totalFuel));
+        obj.push_back(Pair("total_fuel_fee", blockInfo.totalFuelFee));
         obj.push_back(Pair("fuel_rate",     (int32_t)blockInfo.fuelRate));
         obj.push_back(Pair("tx_count",      blockInfo.txCount));
         obj.push_back(Pair("block_size",    blockInfo.totalBlockSize));
@@ -260,19 +260,19 @@ extern Value getminerbyblocktime(const Array& params, bool fHelp) {
 
     VoteDelegateVector delegates;
     if (!pCdMan->pDelegateCache->GetActiveDelegates(delegates)) {
-        LogPrint(BCLog::ERROR, "%s() : GetActiveDelegates failed\n", __FUNCTION__);
+        LogPrint(BCLog::ERROR, "GetActiveDelegates failed\n");
         return false;
     }
 
     uint16_t index = 0;
     for (auto &delegate : delegates)
-        LogPrint(BCLog::DEBUG, "before shuffle: height=%d, index=%d, regId=%s\n", blockHeight, index++, delegate.regid.ToString());
+        LogPrint(BCLog::DEBUG, "[%d] before shuffle: index=%d, regId=%s\n", blockHeight, index++, delegate.regid.ToString());
 
     ShuffleDelegates(blockHeight, blockTime, delegates);
 
     index = 0;
     for (auto &delegate : delegates)
-        LogPrint(BCLog::DEBUG, "after shuffle: height=%d, index=%d, regId=%s\n", blockHeight, index++, delegate.regid.ToString());
+        LogPrint(BCLog::DEBUG, "[%d] after shuffle: index=%d, regId=%s\n", blockHeight, index++, delegate.regid.ToString());
 
     CRegID regid;
     VoteDelegate curDelegate;

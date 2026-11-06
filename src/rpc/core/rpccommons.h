@@ -13,13 +13,40 @@
 #include "commons/json/json_spirit.h"
 #include "entities/asset.h"
 #include "entities/account.h"
+#include "entities/cdp.h"
 #include "tx/tx.h"
 #include "persistence/dexdb.h"
+#include "persistence/pricefeeddb.h"
+#include "persistence/contractdb.h"
 
 using namespace std;
 using namespace json_spirit;
+class CBlockHeader;
+
+#define JSON_RPC_ASSERT(expr, code, ...)                                                           \
+    if (!(expr)) {                                                                                 \
+        string msg = tfm::format(__VA_ARGS__);                                                     \
+        std::ostringstream o;                                                                      \
+        o << msg;                                                                                  \
+        throw JSONRPCError(code, o.str().c_str());                                                 \
+    }
+
+#define JSON_RPC_CAPTURE_AND_RETHROW                                                               \
+    catch (wasm_chain::exception & e) {                                                            \
+        JSON_RPC_ASSERT(false, e.code(), e.to_detail_string())                                     \
+    }                                                                                              \
+    catch (...) {                                                                                  \
+        throw;                                                                                     \
+    }
+
+#define RESPONSE_RPC_HELP(expr, msg)                                                               \
+    if ((expr)) {                                                                                  \
+        throw runtime_error(msg);                                                                  \
+    }
 
 string RegIDToAddress(CUserID &userId);
+Object GetTxDetailJSON(CCacheWrapper &cw, const CBlockHeader &block,
+                       const shared_ptr<CBaseTx> pBaseTx, const CTxCord &txCord);
 Object GetTxDetailJSON(const uint256& txid);
 Array GetTxAddressDetail(std::shared_ptr<CBaseTx> pBaseTx);
 
@@ -43,19 +70,28 @@ namespace RPC_PARAM {
 
     ComboMoney GetComboMoney(const Value &jsonValue, const TokenSymbol &defaultSymbol = SYMB::WICC);
 
+    uint64_t GetTxMinFeeBy(const TxType txType, const TokenSymbol &symbol);
+
+    // @return pair(ComboMoney txFee, uint64_t minTxFeeAmount)
+    pair<ComboMoney, uint64_t> ParseTxFee(const Array &params, const size_t index,
+                                          const TxType txType);
     ComboMoney GetFee(const Array& params, const size_t index, const TxType txType);
     uint64_t GetWiccFee(const Array& params, const size_t index, const TxType txType);
 
 
     CUserID ParseUserIdByAddr(const Value &jsonValue);
-
-    CUserID GetUserId(const Value &jsonValue, const bool senderUid = false);
-
-    string GetLuaContractScript(const Value &jsonValue);
-    CKeyID GetKeyId(const Value &jsonValue, const bool senderUid = false );
-    bool GetKeyId(const Value &jsonValue, CKeyID& keid, const bool senderUid = false );
+    CRegID ParseRegId(const Value &jsonValue, const string &title);
+    CRegID ParseRegId(const Array& params, const size_t index, const string &title, const CRegID &defaultValue);
 
     CKeyID GetUserKeyId(const CUserID &userId);
+
+    CUserID ParseUserId(const Value &jsonValue);
+    CUserID GetUserId(const Value &jsonValue, const bool senderUid = false);
+    CUserID GetRegId(const Value &jsonValue);
+    CRegID  GetRegId(const Array& params, const size_t index, const CRegID &defaultRegId);
+
+    string GetLuaContractScript(const Value &jsonValue);
+    CKeyID GetKeyId(const Value &jsonValue);
 
     uint64_t GetPrice(const Value &jsonValue);
 
@@ -81,6 +117,18 @@ namespace RPC_PARAM {
                            const TokenSymbol &assetSymbol);
     // parse hex str
     bool ParseHex(const string &hexStr, string &binStrOut, string &errStrOut);
+
+    TxType ParseTxType(const Value &jsonValue);
+
+    Value GetWasmContractArgs(const Value &jsonValue);
+
+    uint64_t GetPriceByCdp(CPriceFeedCache &priceFeedCache, const CUserCDP &cdp);
+
+    CUniversalContractStore GetWasmContract(CContractDBCache &contractCache, const CRegID &regid);
+
+    CBlock ReadBlock(CBlockIndex* pBlockIndex);
+
+    Object CdpToJson(const CUserCDP &cdp, uint32_t tipHeight);
 }
 
 /*
@@ -100,9 +148,6 @@ inline bool is_number(const std::string& s) {
 
 
 bool is_decimal(const string& s );
-// [N|R|A]:address
-// NickID (default) | RegID | Address
-bool ParseRpcInputAccountId(const string &comboAccountIdStr, tuple<AccountIDType, string> &comboAccountId);
 
 // [symbol]:amount:[unit]
 // [WICC(default)|WUSD|WGRT|...]:amount:[sawi(default)]

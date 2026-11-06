@@ -88,8 +88,9 @@ namespace eosio { namespace vm {
    }
 
    inline void setup_signal_handler() {
-      static int init_helper = (setup_signal_handler_impl(), 0);
-      ignore_unused_variable_warning(init_helper);
+      //static int init_helper = (setup_signal_handler_impl(), 0);
+      //ignore_unused_variable_warning(init_helper);
+      setup_signal_handler_impl();
       static_assert(std::atomic<sigjmp_buf*>::is_always_lock_free, "Atomic pointers must be lock-free to be async signal safe.");
    }
 

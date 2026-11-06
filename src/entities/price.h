@@ -15,18 +15,21 @@
  * always written as BaseSymbol/QuoteSymbol
  * such as: WICC/USD
  */
-typedef std::pair<TokenSymbol, TokenSymbol> CoinPricePair;
-typedef std::map<CoinPricePair, uint64_t> PriceMap;
+typedef std::map<PriceCoinPair, uint64_t> PriceMap;
+
+static const PriceMap EMPTY_PRICE_MAP = {};
+
+static const uint32_t COIN_PRICE_PAIR_COUNT_MAX = 100;
 
 class CPricePoint {
 public:
-    CoinPricePair coin_price_pair;
+    PriceCoinPair coin_price_pair;
     uint64_t price;  // boosted by 10^8
 
 public:
     CPricePoint() {}
 
-    CPricePoint(const CoinPricePair &coinPricePair, const uint64_t priceIn)
+    CPricePoint(const PriceCoinPair &coinPricePair, const uint64_t priceIn)
         : coin_price_pair(coinPricePair), price(priceIn) {}
 
     CPricePoint(const CPricePoint& other) { *this = other; }
@@ -35,7 +38,7 @@ public:
 
 public:
     uint64_t GetPrice() const { return price; }
-    CoinPricePair GetCoinPricePair() const { return coin_price_pair; }
+    PriceCoinPair GetCoinPricePair() const { return coin_price_pair; }
 
     string ToString() {
         return strprintf("coin_price_pair:%s:%s, price:%lld", coin_price_pair.first, coin_price_pair.second, price);
@@ -66,27 +69,46 @@ public:
     }
 };
 
-inline const string& GetPriceBaseSymbol(const CoinPricePair &pricePair) {
+class CMedianPriceDetail {
+public:
+    uint64_t price = 0;
+    HeightType last_feed_height = 0;
+
+    IMPLEMENT_SERIALIZE(
+        READWRITE(VARINT(price));
+        READWRITE(VARINT(last_feed_height));
+    )
+
+    bool IsEmpty() const {
+        return price == 0 && last_feed_height == 0;
+    }
+
+    void SetEmpty() {
+        price = 0;
+        last_feed_height = 0;
+    }
+
+    string ToString() const {
+        return strprintf("price=%llu, last_feed_height=%llu", price, last_feed_height);
+    }
+
+    bool IsActive(HeightType curHeight, HeightType priceTimeoutBlocks) const {
+        if (GetFeatureForkVersion(curHeight) >= MAJOR_VER_R3)
+            return curHeight <= last_feed_height + priceTimeoutBlocks;
+
+        return true;
+    }
+};
+
+typedef map<PriceCoinPair, CMedianPriceDetail> PriceDetailMap;
+
+
+inline const string& GetPriceBaseSymbol(const PriceCoinPair &pricePair) {
     return std::get<0>(pricePair);
 }
 
-inline const string& GetPriceQuoteSymbol(const CoinPricePair &pricePair) {
+inline const string& GetPriceQuoteSymbol(const PriceCoinPair &pricePair) {
     return std::get<0>(pricePair);
-}
-
-/**
- * check price pair.
- * @return err_msg(string) return nullptr or error msg ptr 
- * 
- */
-inline shared_ptr<string> CheckPricePair(const CoinPricePair &pricePair) {
-    // TODO: support more price pair
-    if (GetPriceBaseSymbol(pricePair) != SYMB::WICC && GetPriceBaseSymbol(pricePair) != SYMB::WGRT) 
-        return make_shared<string>("unsupport base symbol " + GetPriceBaseSymbol(pricePair) + " of price pair");
-
-    if (GetPriceQuoteSymbol(pricePair) != SYMB::USD) 
-        return make_shared<string>("unsupport quote symbol " + GetPriceQuoteSymbol(pricePair) + " of price pair");
-    return nullptr;
 }
 
 #endif //ENTITIES_PRICE_H

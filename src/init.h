@@ -15,12 +15,19 @@ class CWallet;
 
 extern CWallet* pWalletMain;
 
-void StartShutdown();
+void RequestShutdown();
+#define StartShutdown()                                                                            \
+    {                                                                                              \
+        LogPrint(BCLog::INFO, "Request shutdown by %s()\n", __func__);                             \
+        RequestShutdown();                                                                         \
+    }
+
 bool ShutdownRequested();
 void Shutdown();
 bool AppInit(boost::thread_group& threadGroup);
 //!Initialize the logging infrastructure
-void InitLogging();
+bool InitLogging();
+void FinalLogging();
 void Interrupt();
 string HelpMessage();
 void StartCommonGeneration(const int64_t period, const int64_t batchSize);

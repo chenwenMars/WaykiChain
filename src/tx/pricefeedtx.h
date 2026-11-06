@@ -8,6 +8,7 @@
 
 #include "tx.h"
 #include "entities/price.h"
+#include "persistence/assetdb.h"
 
 class CPriceFeedTx : public CBaseTx {
 public:
@@ -43,7 +44,7 @@ public:
     virtual std::shared_ptr<CBaseTx> GetNewInstance() const { return std::make_shared<CPriceFeedTx>(*this); }
     virtual double GetPriority() const { return PRICE_FEED_TRANSACTION_PRIORITY; }    // Top priority
     virtual string ToString(CAccountDBCache &accountCache);            // logging usage
-    virtual Object ToJson(const CAccountDBCache &accountCache) const;  // json-rpc usage
+    virtual Object ToJson(CCacheWrapper &cw) const;  // json-rpc usage
 
     virtual bool CheckTx(CTxExecuteContext &context);
     virtual bool ExecuteTx(CTxExecuteContext &context);

@@ -29,6 +29,7 @@ static const uint8_t CDP_LIQUIDATE_FAIL         = 0X41;
 
 static const uint8_t READ_SCRIPT_FAIL           = 0X50;
 static const uint8_t WRITE_SCRIPT_FAIL          = 0X51;
+static const uint8_t EXECUTE_SCRIPT_FAIL        = 0X52;
 
 static const uint8_t STAKE_CDP_FAIL             = 0X60;
 static const uint8_t REDEEM_CDP_FAIL            = 0X61;
@@ -47,5 +48,8 @@ static const uint8_t WRITE_SYS_PARAM_FAIL       = 0x91;
 
 static const uint8_t READ_PRICE_POINT_FAIL      = 0xa0;
 static const uint8_t WRITE_PRICE_POINT_FAIL     = 0xa1;
+
+static const uint8_t READ_RECEIPT_FAIL          = 0xb0;
+static const uint8_t WRITE_RECEIPT_FAIL         = 0xb1;
 
 #endif //CONFIG_ERRORCODE_H

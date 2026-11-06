@@ -6,7 +6,9 @@
 #ifndef PERSIST_DISK_H
 #define PERSIST_DISK_H
 
+#include "commons/util/util.h"
 #include "commons/serialize.h"
+#include "entities/id.h"
 
 struct CDiskBlockPos {
     int32_t nFile;
@@ -41,17 +43,25 @@ struct CDiskBlockPos {
     bool IsNull() const { return (nFile == -1); }
 
     bool IsEmpty() const { return IsNull(); }
+
+    string ToString() const {
+        return strprintf("file=%d", nFile) + ", " +
+        strprintf("pos=%d", nPos);
+    }
 };
 
 struct CDiskTxPos : public CDiskBlockPos {
     uint32_t nTxOffset;  // after header
+    CTxCord  tx_cord;
 
     IMPLEMENT_SERIALIZE(
         READWRITE(*(CDiskBlockPos *)this);
-        READWRITE(VARINT(nTxOffset));)
+        READWRITE(VARINT(nTxOffset));
+        READWRITE(tx_cord);
+    )
 
-    CDiskTxPos(const CDiskBlockPos &blockIn, uint32_t nTxOffsetIn) :
-        CDiskBlockPos(blockIn.nFile, blockIn.nPos), nTxOffset(nTxOffsetIn) {
+    CDiskTxPos(const CDiskBlockPos &blockIn, uint32_t nTxOffsetIn, const CTxCord &txCordIn) :
+        CDiskBlockPos(blockIn.nFile, blockIn.nPos), nTxOffset(nTxOffsetIn), tx_cord(txCordIn) {
     }
 
     CDiskTxPos() {
@@ -64,6 +74,10 @@ struct CDiskTxPos : public CDiskBlockPos {
     }
 
     void SetEmpty() { SetNull(); }
+
+    string ToString() const {
+        return strprintf("%s, tx_offset=%d", CDiskBlockPos::ToString(), nTxOffset);
+    }
 };
 
 class CBlockFileInfo {

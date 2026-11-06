@@ -18,7 +18,7 @@
 
 #ifndef WIN32
 // for posix_fallocate
-#ifdef __linux_
+#ifdef __linux__
 
 #ifdef _POSIX_C_SOURCE
 #undef _POSIX_C_SOURCE
@@ -34,7 +34,7 @@
 #include <sys/stat.h>
 #include <algorithm>
 
-#else
+#else // if WIN32
 
 #ifdef _MSC_VER
 #pragma warning(disable : 4786)
@@ -60,7 +60,7 @@
 
 #include <io.h> /* for _commit */
 #include <shlobj.h>
-#endif
+#endif // WIN32
 
 #include <openssl/crypto.h>
 #include <openssl/rand.h>
@@ -672,8 +672,7 @@ fs::path GetAbsolutePath(const string& path) {
     return canonical(fs::path(path), ec);
 }
 
-void ReadConfigFile(map<string, string>& mapSettingsRet,
-                    map<string, vector<string>>& mapMultiSettingsRet) {
+void ReadConfigFile(map<string, string>& mapSettingsRet, map<string, vector<string>>& mapMultiSettingsRet) {
     fs::ifstream streamConfig(GetConfigFile());
     if (!streamConfig.good())
         return;  // No WaykiChain.conf file is OK
@@ -681,13 +680,12 @@ void ReadConfigFile(map<string, string>& mapSettingsRet,
     set<string> setOptions;
     setOptions.insert("*");
 
-    for (boost::program_options::detail::config_file_iterator it(streamConfig, setOptions), end;
-         it != end; ++it) {
+    for (boost::program_options::detail::config_file_iterator it(streamConfig, setOptions), end; it != end; ++it) {
         // Don't overwrite existing settings so command line settings override WaykiChain.conf
-        string strKey = string("-") + it->string_key;
-        if (mapSettingsRet.count(strKey) == 0) {
+        string strKey = strprintf("-%s", it->string_key);
+        if (mapSettingsRet.count(strKey) == 0)
             mapSettingsRet[strKey] = it->value[0];
-        }
+
         mapMultiSettingsRet[strKey].push_back(it->value[0]);
     }
     // If datadir is changed in .conf file:
@@ -726,7 +724,7 @@ bool RenameOver(boost::filesystem::path src, boost::filesystem::path dest) {
 bool TryCreateDirectory(const boost::filesystem::path& p) {
     try {
         return boost::filesystem::create_directory(p);
-    } catch (boost::filesystem::filesystem_error) {
+    } catch (const boost::filesystem::filesystem_error&) {
         if (!boost::filesystem::exists(p) || !boost::filesystem::is_directory(p)) throw;
     }
 
@@ -871,7 +869,7 @@ void AddTimeData(const CNetAddr& ip, int64_t nTime) {
     // Add data
     static CMedianFilter<int64_t> vTimeOffsets(200, 0);
     vTimeOffsets.input(nOffsetSample);
-    LogPrint(BCLog::INFO, "Added time data, samples %d, offset %+d (%+d minutes)\n", vTimeOffsets.size(),
+    LogPrint(BCLog::INFO, "samples size=%d, offset=%+d (%+d minutes)\n", vTimeOffsets.size(),
              nOffsetSample, nOffsetSample / 60);
 
     if (vTimeOffsets.size() >= 5 && vTimeOffsets.size() % 2 == 1) {
@@ -1054,4 +1052,38 @@ bool ParseInt32(const std::string& str, int32_t *out)
     return endp && *endp == 0 && !errno &&
         n >= std::numeric_limits<int32_t>::min() &&
         n <= std::numeric_limits<int32_t>::max();
+}
+
+bool  ConvertPermsToString(uint64_t perms, uint8_t total_perms_count, string& permsList) {
+    ostringstream s;
+    for (int i = total_perms_count - 1; i >= 0; i--) {
+        uint64_t p = (perms & ( 1 << i )) > 0 ? 1 :0;
+        s << p;
+    }
+
+    permsList = s.str();
+    return true;
+}
+
+// bool  ConvertPermsToString(uint64_t perms, uint8_t total_perms_count, string& permsList) {
+//     ostringstream s;
+//     for (uint8_t i = total_perms_count - 1; i >= 0; i--) {
+//         uint64_t p = (perms & ( 1 << i )) > 0 ? 1 :0;
+//         s << i << ":" << p;
+//         if (i != 0)
+//              s << ", ";
+//     }
+
+//     permsList = s.str();
+//     return true;
+// }
+
+shared_ptr<Benchmark> MakeBenchmark(const char *msg, const char *fileIn, int lineIn,
+                                    const char *funcIn) {
+    return SysCfg().IsBenchmark() ? make_shared<Benchmark>(msg, fileIn, lineIn, funcIn) : nullptr;
+}
+
+shared_ptr<Benchmark> MakeBenchmark(const char *msg, const char *fileIn, int lineIn,
+                                    const char *funcIn, const Benchmark::Time &startIn) {
+    return SysCfg().IsBenchmark() ? make_shared<Benchmark>(msg, fileIn, lineIn, funcIn, startIn) : nullptr;
 }

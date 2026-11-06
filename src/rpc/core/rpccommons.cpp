@@ -16,6 +16,8 @@
 #include "abi_serializer.hpp"
 #include "wasm_context.hpp"
 #include "wasm_variant_trace.hpp"
+#include "wasm/exception/exceptions.hpp"
+#include "tx/cdptx.h"
 
 #include <regex>
 #include <fstream>
@@ -38,7 +40,7 @@ std::vector<std::string> split(std::string strToSplit, char delimeter) {
 
 bool is_decimal(const string& s ){
     std::regex r("([1-9][0-9]*|0)\\.[0-9]+");
-    return regex_match(s, r) ;
+    return regex_match(s, r);
 }
 
 
@@ -64,73 +66,32 @@ std::vector<std::string> split(std::string stringToBeSplitted, std::string delim
 }
 bool pow10(string comboAmountStr, const unsigned int precision, int64_t& sawiAmount){
 
-    auto v = split(comboAmountStr, ".") ;
+    auto v = split(comboAmountStr, ".");
     if(v.size() == 1)
-        v.push_back("") ;
-    string& intPart = v[0] ;
-    string& decimalPart = v[1] ;
+        v.push_back("");
+    string& intPart = v[0];
+    string& decimalPart = v[1];
 
     if(decimalPart.size() > precision )
-        return false ;
-    unsigned int i = 0 ;
+        return false;
+    unsigned int i = 0;
     for(;i<precision;i++){
         if(decimalPart.size() > i)
             intPart.push_back(decimalPart[i]);
         else
-            intPart.push_back('0') ;
+            intPart.push_back('0');
     }
-    sawiAmount =  atoll(intPart.data()) ;
-    return true ;
-}
-
-// [N|R|A]:address
-// NickID (default) | RegID | Address
-bool ParseRpcInputAccountId(const string &comboAccountIdStr, tuple<AccountIDType, string> &comboAccountId) {
-    vector<string> comboAccountIdArr = split(comboAccountIdStr, ':');
-    switch (comboAccountIdArr.size()) {
-        case 0: {
-            get<0>(comboAccountId) = AccountIDType::NICK_ID;
-            get<1>(comboAccountId) = comboAccountIdArr[0];
-            break;
-        }
-        case 1: {
-            if (comboAccountIdArr[0].size() > 1)
-                return false;
-
-            char tag = toupper(comboAccountIdArr[0][0]);
-            if (tag == 'N') {
-                get<0>(comboAccountId) = AccountIDType::NICK_ID;
-
-            } else if (tag == 'R') {
-                get<0>(comboAccountId) = AccountIDType::REG_ID;
-
-            } else if (tag == 'A') {
-                get<0>(comboAccountId) = AccountIDType::ADDRESS;
-
-            } else
-                return false;
-
-            get<1>(comboAccountId) = comboAccountIdArr[1];
-
-            break;
-        }
-        default: break;
-    }
-
+    sawiAmount =  atoll(intPart.data());
     return true;
 }
 
-
-
-
-
 bool parseAmountAndUnit( vector<string>& comboMoneyArr, ComboMoney& comboMoney,const TokenSymbol &defaultSymbol = SYMB::WICC){
 
-    int64_t iValue = 0 ;
+    int64_t iValue = 0;
 
     string strUnit = comboMoneyArr[1];
     std::for_each(strUnit.begin(), strUnit.end(), [](char &c) { c = ::tolower(c); });
-    if (!CoinUnitTypeTable.count(strUnit))
+    if (!CoinUnitTypeMap.count(strUnit))
         return false;
 
     if(!pow10(comboMoneyArr[0].c_str(), CoinUnitPrecisionTable.find(strUnit)->second, iValue))
@@ -143,7 +104,7 @@ bool parseAmountAndUnit( vector<string>& comboMoneyArr, ComboMoney& comboMoney,c
     comboMoney.amount = (uint64_t)iValue;
     comboMoney.unit   = COIN_UNIT::SAWI;
 
-    return true ;
+    return true;
 }
 
 bool parseSymbolAndAmount(vector<string>& comboMoneyArr, ComboMoney& comboMoney){
@@ -156,13 +117,13 @@ bool parseSymbolAndAmount(vector<string>& comboMoneyArr, ComboMoney& comboMoney)
         return false;
 
     string strSymbol = comboMoneyArr[0];
-    std::for_each(strSymbol.begin(), strSymbol.end(), [](char &c) { c = ::toupper(c); });
+   // std::for_each(strSymbol.begin(), strSymbol.end(), [](char &c) { c = ::toupper(c); });
 
     comboMoney.symbol = strSymbol;
     comboMoney.amount = (uint64_t)iValue;
     comboMoney.unit   = COIN_UNIT::SAWI;
 
-    return true ;
+    return true;
 }
 
 // [symbol]:amount:[unit]
@@ -188,7 +149,7 @@ bool ParseRpcInputMoney(const string &comboMoneyStr, ComboMoney &comboMoney, con
         case 2: {
             if (is_number(comboMoneyArr[0]) || is_decimal(comboMoneyArr[0])) {
 
-                return parseAmountAndUnit(comboMoneyArr, comboMoney) ;
+                return parseAmountAndUnit(comboMoneyArr, comboMoney);
 
             } else if (is_number(comboMoneyArr[1])) {
                 return parseSymbolAndAmount(comboMoneyArr,comboMoney);
@@ -207,13 +168,13 @@ bool ParseRpcInputMoney(const string &comboMoneyStr, ComboMoney &comboMoney, con
                 return false;
 
             string strSymbol = comboMoneyArr[0];
-            std::for_each(strSymbol.begin(), strSymbol.end(), [](char &c) { c = ::toupper(c); });
-            vector<string> amountAndUnit ;
+          //  std::for_each(strSymbol.begin(), strSymbol.end(), [](char &c) { c = ::toupper(c); });
+            vector<string> amountAndUnit;
             amountAndUnit.push_back(comboMoneyArr[1]);
             amountAndUnit.push_back(comboMoneyArr[2]);
-            return parseAmountAndUnit(amountAndUnit,comboMoney,strSymbol) ;
+            return parseAmountAndUnit(amountAndUnit,comboMoney,strSymbol);
 
-            break ;
+            break;
         }
         default:
             return false;
@@ -224,7 +185,7 @@ bool ParseRpcInputMoney(const string &comboMoneyStr, ComboMoney &comboMoney, con
 
 
 Object SubmitTx(const CKeyID &keyid, CBaseTx &tx) {
-    if (!pWalletMain->HaveKey(keyid)) {
+    if (!pWalletMain->HasKey(keyid)) {
         throw JSONRPCError(RPC_WALLET_ERROR, "Sender address not found in wallet");
     }
 
@@ -232,14 +193,14 @@ Object SubmitTx(const CKeyID &keyid, CBaseTx &tx) {
         throw JSONRPCError(RPC_WALLET_ERROR, "Sign failed");
     }
 
-    std::tuple<bool, string> ret = pWalletMain->CommitTx((CBaseTx *)&tx);
-    if (!std::get<0>(ret)) {
+    CValidationState state;
+    if (!pWalletMain->CommitTx((CBaseTx *)&tx, state))
         throw JSONRPCError(RPC_WALLET_ERROR,
-                           strprintf("SubmitTx failed: txid=%s, %s", tx.GetHash().GetHex(), std::get<1>(ret)));
-    }
+                           strprintf("CommitTx failed: code=%d, reason=%s", state.GetRejectCode(),
+                                     state.GetRejectReason()));
 
     Object obj;
-    obj.push_back(Pair("txid", std::get<1>(ret)));
+    obj.push_back(Pair("txid", tx.GetHash().GetHex()));
 
     return obj;
 }
@@ -252,7 +213,47 @@ string RegIDToAddress(CUserID &userId) {
     return "cannot get address from given RegId";
 }
 
+Object GetTxDetailJSON(CCacheWrapper &cw, const CBlockHeader &header,
+                       const shared_ptr<CBaseTx> pBaseTx, const CTxCord &txCord) {
+    Object obj;
+    auto txid = pBaseTx->GetHash();
+    //obj = pBaseTx->IsMultiSignSupport()?pBaseTx->ToJsonMultiSign(*database):pBaseTx->ToJson(*pCdMan->pAccountCache);
+    obj = pBaseTx->ToJson(cw);
+
+
+    obj.push_back(Pair("confirmed_height",  (int32_t)header.GetHeight()));
+    obj.push_back(Pair("confirmed_time",    (int32_t)header.GetTime()));
+    obj.push_back(Pair("block_hash",        header.GetHash().GetHex()));
+    obj.push_back(Pair("tx_cord", txCord.ToString()));
+
+    if (SysCfg().IsGenReceipt()) {
+        vector<CReceipt> receipts;
+        pCdMan->pReceiptCache->GetTxReceipts(txid, receipts);
+        obj.push_back(Pair("receipts", JSON::ToJson(cw.accountCache, receipts)));
+    }
+
+    CDataStream ds(SER_DISK, CLIENT_VERSION);
+    ds << pBaseTx;
+    obj.push_back(Pair("rawtx", HexStr(ds.begin(), ds.end())));
+    obj.push_back(Pair("confirmations",     chainActive.Height() - (int32_t)header.GetHeight()));
+
+    string trace;
+    auto database = std::make_shared<CCacheWrapper>(pCdMan);
+    auto resolver = make_resolver(*database);
+    if(database->contractCache.GetContractTraces(txid, trace)){
+
+        json_spirit::Value value_json;
+        std::vector<char>  trace_bytes = std::vector<char>(trace.begin(), trace.end());
+        transaction_trace  trace       = wasm::unpack<transaction_trace>(trace_bytes);
+        to_variant(trace, value_json, resolver);
+        obj.push_back(Pair("tx_trace", value_json));
+    }
+
+    return obj;
+}
+
 Object GetTxDetailJSON(const uint256& txid) {
+    auto pCw = make_shared<CCacheWrapper>(pCdMan);
     Object obj;
     {
         std::shared_ptr<CBaseTx> pBaseTx;
@@ -260,7 +261,7 @@ Object GetTxDetailJSON(const uint256& txid) {
         LOCK(cs_main);
         if (SysCfg().IsTxIndex()) {
             CDiskTxPos postx;
-            if (pCdMan->pBlockCache->ReadTxIndex(txid, postx)) {
+            if (pCw->blockCache.ReadTxIndex(txid, postx)) {
                 CAutoFile file(OpenBlockFile(postx, true), SER_DISK, CLIENT_VERSION);
                 CBlockHeader header;
 
@@ -268,38 +269,9 @@ Object GetTxDetailJSON(const uint256& txid) {
                     file >> header;
                     fseek(file, postx.nTxOffset, SEEK_CUR);
                     file >> pBaseTx;
-                    //obj = pBaseTx->IsMultiSignSupport()?pBaseTx->ToJsonMultiSign(*database):pBaseTx->ToJson(*pCdMan->pAccountCache);
-                    obj = pBaseTx->ToJson(*pCdMan->pAccountCache);
-
-                    obj.push_back(Pair("confirmations",     chainActive.Height() - (int32_t)header.GetHeight()));
-                    obj.push_back(Pair("confirmed_height",  (int32_t)header.GetHeight()));
-                    obj.push_back(Pair("confirmed_time",    (int32_t)header.GetTime()));
-                    obj.push_back(Pair("block_hash",        header.GetHash().GetHex()));
-
-                    if (SysCfg().IsGenReceipt()) {
-                        vector<CReceipt> receipts;
-                        pCdMan->pReceiptCache->GetTxReceipts(txid, receipts);
-                        obj.push_back(Pair("receipts", JSON::ToJson(*pCdMan->pAccountCache, receipts)));
-                    }
-
-                    CDataStream ds(SER_DISK, CLIENT_VERSION);
-                    ds << pBaseTx;
-                    obj.push_back(Pair("rawtx", HexStr(ds.begin(), ds.end())));
-
-                    string trace;
-                    auto database = std::make_shared<CCacheWrapper>(pCdMan);
-                    auto resolver = make_resolver(database);
-                    if(database->contractCache.GetContractTraces(txid, trace)){
-
-                        json_spirit::Value value_json;
-                        std::vector<char>  trace_bytes = std::vector<char>(trace.begin(), trace.end());
-                        transaction_trace  trace       = wasm::unpack<transaction_trace>(trace_bytes);
-                        to_variant(trace, value_json, resolver);
-                        obj.push_back(Pair("tx_trace", value_json));
-                     }
-
+                    obj = GetTxDetailJSON(*pCw, header, pBaseTx, postx.tx_cord);
                 } catch (std::exception &e) {
-                    throw runtime_error(tfm::format("%s : Deserialize or I/O error - %s", __func__, e.what()).c_str());
+                    throw runtime_error(strprintf("%s : Deserialize or I/O error - %s", __func__, e.what()).c_str());
                 }
 
                 return obj;
@@ -309,7 +281,7 @@ Object GetTxDetailJSON(const uint256& txid) {
         {
             pBaseTx = mempool.Lookup(txid);
             if (pBaseTx.get()) {
-                obj = pBaseTx->ToJson(*pCdMan->pAccountCache);
+                obj = pBaseTx->ToJson(*pCw);
                 CDataStream ds(SER_DISK, CLIENT_VERSION);
                 ds << pBaseTx;
                 obj.push_back(Pair("rawtx", HexStr(ds.begin(), ds.end())));
@@ -324,16 +296,23 @@ Object GetTxDetailJSON(const uint256& txid) {
         assert(genesisblock.GetMerkleRootHash() == genesisblock.BuildMerkleTree());
         for (uint32_t i = 0; i < genesisblock.vptx.size(); ++i) {
             if (txid == genesisblock.GetTxid(i)) {
-                obj = genesisblock.vptx[i]->ToJson(*pCdMan->pAccountCache);
+                obj = genesisblock.vptx[i]->ToJson(*pCw);
 
-                obj.push_back(Pair("confirmations",     chainActive.Height()));
+
                 obj.push_back(Pair("confirmed_height",  chainActive.Height()));
                 obj.push_back(Pair("confirmed_time",    (int32_t)genesisblock.GetTime()));
                 obj.push_back(Pair("block_hash",        genesisblock.GetHash().GetHex()));
+                obj.push_back(Pair("tx_cord", CTxCord(0, i).ToString()));
 
                 CDataStream ds(SER_DISK, CLIENT_VERSION);
                 ds << genesisblock.vptx[i];
+                if (SysCfg().IsGenReceipt()) {
+                    vector<CReceipt> receipts;
+                    pCdMan->pReceiptCache->GetTxReceipts(txid, receipts);
+                    obj.push_back(Pair("receipts", JSON::ToJson(pCw->accountCache, receipts)));
+                }
                 obj.push_back(Pair("rawtx", HexStr(ds.begin(), ds.end())));
+                obj.push_back(Pair("confirmations",     chainActive.Height()));
 
                 return obj;
             }
@@ -360,10 +339,10 @@ bool JSON::GetObjectFieldValue(const Value &jsonObj, const string &fieldName,Val
     const Value& jsonValue = find_value(jsonObj.get_obj(), fieldName);
     if (jsonValue.type() == null_type) {
 
-        return false ;
+        return false;
     }
-    returnValue = jsonValue ;
-    return true ;
+    returnValue = jsonValue;
+    return true;
 
 }
 
@@ -383,12 +362,15 @@ Object JSON::ToJson(const CAccountDBCache &accountCache, const CReceipt &receipt
         accountCache.GetKeyId(receipt.to_uid, toKeyId);
 
     Object obj;
+    obj.push_back(Pair("receipt_type",  (uint64_t)receipt.receipt_type));
+    obj.push_back(Pair("receipt_type_name", GetReceiptTypeName(receipt.receipt_type)));
+    obj.push_back(Pair("op_type",       (uint64_t) receipt.op_type));
+    obj.push_back(Pair("op_type_name",  GetBalanceOpTypeName(receipt.op_type)));
     obj.push_back(Pair("from_addr",     fromKeyId.ToAddress()));
     obj.push_back(Pair("to_addr",       toKeyId.ToAddress()));
     obj.push_back(Pair("coin_symbol",   receipt.coin_symbol));
-    obj.push_back(Pair("coin_amount",   receipt.coin_amount));
-    obj.push_back(Pair("receipt_code",  (uint64_t)receipt.code));
-    obj.push_back(Pair("memo",          GetReceiptCodeName(receipt.code)));
+    obj.push_back(Pair("coin_amount",   JsonValueFromAmount(receipt.coin_amount)));
+
     return obj;
 }
 
@@ -406,7 +388,7 @@ Array JSON::ToJson(const CAccountDBCache &accountCache, const vector<CReceipt> &
 
 uint32_t RPC_PARAM::GetUint32(const Value &jsonValue) {
     int64_t ret = jsonValue.get_int64();
-    if (ret < 0) {
+    if (ret < 0 || ret > uint32_t(-1)) {
         throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("value=%lld out of range", ret));
     }
     return uint32_t(ret);
@@ -439,7 +421,7 @@ ComboMoney RPC_PARAM::GetComboMoney(const Value &jsonValue,
 
     } else if (valueType == json_spirit::Value_type::str_type) {
         if (!ParseRpcInputMoney(jsonValue.get_str(), money, defaultSymbol)) {
-            throw JSONRPCError(RPC_INVALID_PARAMETER, "Invalid combo money format");
+            throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Invalid combo money format=%s", jsonValue.get_str()));
         }
     } else {
         throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Invalid json value type: %s", JSON::GetValueTypeName(valueType)));
@@ -448,37 +430,47 @@ ComboMoney RPC_PARAM::GetComboMoney(const Value &jsonValue,
     return money;
 }
 
-ComboMoney RPC_PARAM::GetFee(const Array& params, const size_t index, const TxType txType) {
-    ComboMoney fee;
+uint64_t RPC_PARAM::GetTxMinFeeBy(const TxType txType, const TokenSymbol &symbol) {
+    uint64_t minFee = 0;
+    auto spCw = std::make_shared<CCacheWrapper>(pCdMan);
+    if (!::GetTxMinFee(*spCw, txType, chainActive.Height(), symbol, minFee))
+        throw JSONRPCError(RPC_INVALID_PARAMS,
+            strprintf("Can not find the min tx fee! symbol=%s", symbol));
+    return minFee;
+}
+
+// @return pair(ComboMoney txFee, uint64_t minTxFeeAmount)
+pair<ComboMoney, uint64_t> RPC_PARAM::ParseTxFee(const Array &params, const size_t index,
+                                                 const TxType txType) {
+
+    ComboMoney txFee;
+    uint64_t minTxFeeAmount;
     if (params.size() > index) {
-        fee = GetComboMoney(params[index], SYMB::WICC);
-        if (!kFeeSymbolSet.count(fee.symbol))
+        txFee = GetComboMoney(params[index], SYMB::WICC);
+        if (!kFeeSymbolSet.count(txFee.symbol))
             throw JSONRPCError(RPC_INVALID_PARAMS,
-                strprintf("Fee symbol is %s, but expect %s", fee.symbol, GetFeeSymbolSetStr()));
+                strprintf("Fee symbol is %s, but expect %s", txFee.symbol, GetFeeSymbolSetStr()));
 
-        uint64_t minFee;
-        if (!GetTxMinFee(txType, chainActive.Height(), fee.symbol, minFee))
-            throw JSONRPCError(RPC_INVALID_PARAMS,
-                strprintf("Can not find the min tx fee! symbol=%s", fee.symbol));
-        if (fee.GetSawiAmount() < minFee)
-            throw JSONRPCError(RPC_INVALID_PARAMS,
-                strprintf("The given fee is too small: %llu < %llu sawi", fee.amount, minFee));
+        minTxFeeAmount = GetTxMinFeeBy(txType, txFee.symbol);
     } else {
-        uint64_t minFee;
-        if (!GetTxMinFee(txType, chainActive.Height(), SYMB::WICC, minFee))
-            throw JSONRPCError(RPC_INVALID_PARAMS,
-                strprintf("Can not find the min tx fee! symbol=%s", SYMB::WICC));
-        fee.symbol = SYMB::WICC;
-        fee.amount = minFee;
-        fee.unit = COIN_UNIT::SAWI;
+        minTxFeeAmount = GetTxMinFeeBy(txType, SYMB::WICC);
+        txFee = {SYMB::WICC, minTxFeeAmount, COIN_UNIT::SAWI};
     }
+    return {txFee, minTxFeeAmount};
+}
 
-    return fee;
+ComboMoney RPC_PARAM::GetFee(const Array& params, const size_t index, const TxType txType) {
+    const auto [txFee, minTxFeeAmount] = ParseTxFee(params, index, txType);
+    if (txFee.GetAmountInSawi() < minTxFeeAmount)
+        throw JSONRPCError(RPC_INVALID_PARAMS,
+            strprintf("The given fee is too small: %llu < %llu sawi", txFee.amount, minTxFeeAmount));
+    return txFee;
 }
 
 uint64_t RPC_PARAM::GetWiccFee(const Array& params, const size_t index, const TxType txType) {
     uint64_t fee, minFee;
-    if (!GetTxMinFee(txType, chainActive.Height(), SYMB::WICC, minFee))
+    auto spCw = std::make_shared<CCacheWrapper>(pCdMan);
+    if (!GetTxMinFee(*spCw, txType, chainActive.Height(), SYMB::WICC, minFee))
         throw JSONRPCError(RPC_INVALID_PARAMS,
             strprintf("Can not find the min tx fee! symbol=%s", SYMB::WICC));
     if (params.size() > index) {
@@ -496,16 +488,28 @@ uint64_t RPC_PARAM::GetWiccFee(const Array& params, const size_t index, const Tx
 CUserID RPC_PARAM::ParseUserIdByAddr(const Value &jsonValue) {
     auto pUserId = CUserID::ParseUserId(jsonValue.get_str());
     if (!pUserId) {
-        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid address");
+        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, strprintf("Invalid address=%s", jsonValue.get_str()));
     }
     return *pUserId;
 }
 
-CUserID RPC_PARAM::GetUserId(const Value &jsonValue, const bool senderUid ) {
-    auto pUserId = CUserID::ParseUserId(jsonValue.get_str());
-    if (!pUserId) {
-        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid address");
+CRegID RPC_PARAM::ParseRegId(const Value &jsonValue, const string &title) {
+
+    const auto &idStr = jsonValue.get_str();
+    if (!CRegID::IsSimpleRegIdStr(idStr))
+        throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("invalid regid fomat of %s=%s", title, idStr));
+    return CRegID(idStr);
+}
+
+CRegID RPC_PARAM::ParseRegId(const Array& params, const size_t index, const string &title, const CRegID &defaultValue) {
+    if (params.size() > index && !params[index].get_str().empty()) {
+        return ParseRegId(params[index], title);
     }
+    return defaultValue;
+}
+
+CUserID RPC_PARAM::GetUserId(const Value &jsonValue, const bool bSenderUid ) {
+    auto userId = ParseUserIdByAddr(jsonValue);
 
     /**
      * Attention: feature enable in stable coin release!
@@ -526,57 +530,61 @@ CUserID RPC_PARAM::GetUserId(const Value &jsonValue, const bool senderUid ) {
      */
     CRegID regid;
     if (GetFeatureForkVersion(chainActive.Height()) >= MAJOR_VER_R2) {
-        if (pCdMan->pAccountCache->GetRegId(*pUserId, regid) && regid.IsMature(chainActive.Height())) {
+        if (pCdMan->pAccountCache->GetRegId(userId, regid) && regid.IsMature(chainActive.Height()))
             return CUserID(regid);
-        } else {
-            if (senderUid && pUserId->is<CKeyID>()) {
-                CPubKey sendPubKey;
-                if (!pWalletMain->GetPubKey(pUserId->get<CKeyID>(), sendPubKey) || !sendPubKey.IsFullyValid())
-                    throw JSONRPCError(RPC_WALLET_ERROR, "Key not found in the local wallet");
 
-                return CUserID(sendPubKey);
-            } else {
-                return *pUserId;
-            }
+        if (bSenderUid && userId.is<CKeyID>()) {
+            CPubKey sendPubKey;
+            if (!pWalletMain->GetPubKey(userId.get<CKeyID>(), sendPubKey) || !sendPubKey.IsFullyValid())
+                throw JSONRPCError(RPC_WALLET_ERROR, "Key not found in the local wallet");
+
+            return CUserID(sendPubKey);
         }
+
+        return userId;
+
     } else { // MAJOR_VER_R1
-        if (pCdMan->pAccountCache->GetRegId(*pUserId, regid)) {
+        if (pCdMan->pAccountCache->GetRegId(userId, regid)) {
             return CUserID(regid);
         } else {
-            return *pUserId;
+            return userId;
         }
     }
-}
-
-CKeyID RPC_PARAM::GetKeyId(const Value &jsonValue, const bool senderUid  ){
-
-    CKeyID keyid;
-    if(!RPC_PARAM::GetKeyId(jsonValue, keyid, senderUid))
-        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid address");
-    return keyid ;
-}
-
-bool RPC_PARAM::GetKeyId(const Value &jsonValue, CKeyID& keyid, const bool senderUid  ) {
-
-    CUserID uid = RPC_PARAM::GetUserId(jsonValue, senderUid);
-    if(uid.is<CKeyID>())
-        keyid =  uid.get<CKeyID>();
-    else if( uid.is<CPubKey>()) {
-        keyid =  uid.get<CPubKey>().GetKeyId();
-    }else if(uid.is<CRegID>()){
-        keyid =  uid.get<CRegID>().GetKeyId(*pCdMan->pAccountCache);
-    }
-    return !keyid.IsEmpty();
 }
 
 CKeyID RPC_PARAM::GetUserKeyId(const CUserID &uid) {
     CKeyID keyid;
-    pCdMan->pAccountCache->GetKeyId(uid, keyid);
-    if (!keyid.IsEmpty()) {
+    if (!pCdMan->pAccountCache->GetKeyId(uid, keyid))
         throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY,
-                           strprintf("Get keyid by userid=%s failed", uid.ToString()));
-    }
+                           strprintf("Get account keyid by (%s) failed", uid.ToString()));
     return keyid;
+}
+
+CKeyID RPC_PARAM::GetKeyId(const Value &jsonValue){
+    return GetUserKeyId(ParseUserIdByAddr(jsonValue));
+}
+
+CUserID RPC_PARAM::GetRegId(const Value &jsonValue) {
+
+    auto uid = ParseUserIdByAddr(jsonValue);
+    CRegID regid;
+    if (!pCdMan->pAccountCache->GetRegId(uid, regid))
+        throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("get regid by uid=%s failed", uid.ToString()));
+
+    return regid;
+}
+
+CRegID RPC_PARAM::GetRegId(const Array& params, const size_t index, const CRegID &defaultRegId) {
+   if (params.size() <= index)
+        return defaultRegId;
+
+    CRegID regid;
+    auto uid = ParseUserIdByAddr(params[index]);
+
+    if (!pCdMan->pAccountCache->GetRegId(uid, regid))
+        throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("get regid by uid=%s failed", uid.ToString()));
+
+    return regid;
 }
 
 string RPC_PARAM::GetLuaContractScript(const Value &jsonValue) {
@@ -587,7 +595,7 @@ string RPC_PARAM::GetLuaContractScript(const Value &jsonValue) {
     if (filePath.compare(0, LUA_CONTRACT_LOCATION_PREFIX.size(), LUA_CONTRACT_LOCATION_PREFIX.c_str()) != 0)
         throw JSONRPCError(RPC_SCRIPT_FILEPATH_INVALID, "Lua Script file not inside /tmp/lua dir or its subdir");
 
-    std::tuple<bool, string> result = CLuaVM::CheckScriptSyntax(filePath.c_str());
+    std::tuple<bool, string> result = CLuaVM::CheckScriptSyntax(filePath.c_str(), chainActive.Height());
     if (!std::get<0>(result))
         throw JSONRPCError(RPC_INVALID_PARAMETER, std::get<1>(result));
 
@@ -668,11 +676,7 @@ TokenSymbol RPC_PARAM::GetOrderAssetSymbol(const Value &jsonValue) {
 }
 
 TokenSymbol RPC_PARAM::GetAssetIssueSymbol(const Value &jsonValue) {
-    TokenSymbol symbol = jsonValue.get_str();
-    if (symbol.empty() || symbol.size() > MAX_TOKEN_SYMBOL_LEN)
-        throw JSONRPCError(RPC_INVALID_PARAMS,
-                           "asset_symbol=%s must be composed of 6 or 7 capital letters [A-Z]");
-    return symbol;
+    return jsonValue.get_str();
 }
 
 TokenName RPC_PARAM::GetAssetName(const Value &jsonValue) {
@@ -693,11 +697,11 @@ string RPC_PARAM::GetBinStrFromHex(const Value &jsonValue, const string &paramNa
 
 void RPC_PARAM::CheckAccountBalance(CAccount &account, const TokenSymbol &tokenSymbol, const BalanceOpType opType,
                                     const uint64_t value) {
-    if (pCdMan->pAssetCache->CheckTransferCoinSymbol(tokenSymbol))
+    if (!pCdMan->pAssetCache->CheckAsset(tokenSymbol))
         throw JSONRPCError(RPC_WALLET_ERROR, strprintf("Unsupported coin symbol: %s", tokenSymbol));
 
-
-    if (!account.OperateBalance(tokenSymbol, opType, value))
+    ReceiptList receipts;
+    if (!account.OperateBalance(tokenSymbol, opType, value, ReceiptType::NULL_RECEIPT_TYPE, receipts))
         throw JSONRPCError(RPC_WALLET_INSUFFICIENT_FUNDS, strprintf("Account does not have enough %s", tokenSymbol));
 }
 
@@ -708,18 +712,16 @@ void RPC_PARAM::CheckActiveOrderExisted(CDexDBCache &dexCache, const uint256 &or
 
 void RPC_PARAM::CheckOrderSymbols(const string &title, const TokenSymbol &coinSymbol,
                                   const TokenSymbol &assetSymbol) {
-    if (coinSymbol.empty() || coinSymbol.size() > MAX_TOKEN_SYMBOL_LEN || kCoinTypeSet.count(coinSymbol) == 0) {
-        throw JSONRPCError(RPC_INVALID_PARAMS, strprintf("%s invalid order coin symbol=%s", title, coinSymbol));
-    }
+    if (coinSymbol == assetSymbol)
+        throw JSONRPCError(REJECT_INVALID,
+                           strprintf("%s, coin_symbol=%s is same to asset_symbol=%s", title,
+                                     coinSymbol, assetSymbol));
 
-    if (assetSymbol.empty() || assetSymbol.size() > MAX_TOKEN_SYMBOL_LEN || kCoinTypeSet.count(assetSymbol) == 0) {
-        throw JSONRPCError(RPC_INVALID_PARAMS, strprintf("%s invalid order asset symbol=%s", title, assetSymbol));
-    }
+    if (!pCdMan->pAssetCache->CheckDexQuoteSymbol(coinSymbol))
+        throw JSONRPCError(REJECT_INVALID, strprintf("%s, unsupport coin_symbol=%s", title, coinSymbol));
 
-    if (kTradingPairSet.count(make_pair(assetSymbol, coinSymbol)) == 0) {
-        throw JSONRPCError(RPC_INVALID_PARAMS, strprintf("%s unsupport trading pair! coin_symbol=%s, asset_symbol=%s",
-            title, coinSymbol, assetSymbol));
-    }
+    if (!pCdMan->pAssetCache->CheckDexBaseSymbol(assetSymbol))
+        throw JSONRPCError(REJECT_INVALID, strprintf("%s, unsupport asset_symbol=%s", title, assetSymbol));
 }
 
 bool RPC_PARAM::ParseHex(const string &hexStr, string &binStrOut, string &errStrOut) {
@@ -755,4 +757,110 @@ bool RPC_PARAM::ParseHex(const string &hexStr, string &binStrOut, string &errStr
         begin += 2;
     }
     return true;
+}
+
+TxType RPC_PARAM::ParseTxType(const Value &jsonValue) {
+    TxType ret = ::ParseTxType(jsonValue.get_str());
+    if (ret == TxType::NULL_TX)
+        throw JSONRPCError(REJECT_INVALID, strprintf("unsupport tx_type=%s", jsonValue.get_str()));
+    return ret;
+}
+
+Value RPC_PARAM::GetWasmContractArgs(const Value &jsonValue) {
+    auto valueType = jsonValue.type();
+
+    if (valueType == json_spirit::obj_type || valueType == json_spirit::array_type) {
+        return jsonValue;
+    } else if (valueType == json_spirit::str_type) {
+        json_spirit::Value newValue;
+        try {
+            json_spirit::read_string_or_throw(jsonValue.get_str(), newValue);
+        } catch (json_spirit::Error_position &e) {
+            throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Parse json of contract data error! line[%d:%d] %s",
+                    e.line_, e.column_, e.reason_));
+        }
+        auto newValueType = newValue.type();
+        if (newValueType == json_spirit::obj_type || newValueType == json_spirit::array_type) {
+            return newValue;
+        }
+    }
+    throw JSONRPCError(RPC_INVALID_PARAMETER, "The contract action args type must be object or array,"
+                                              " or string of object or array");
+}
+
+uint64_t RPC_PARAM::GetPriceByCdp(CPriceFeedCache &priceFeedCache, const CUserCDP &cdp) {
+    auto quoteSymbol = GetQuoteSymbolByCdpScoin(cdp.scoin_symbol);
+    if (quoteSymbol.empty())  {
+        throw JSONRPCError(RPC_INVALID_PARAMETER,
+                           strprintf("scoin symbol=%s does not have corresponding quote symbol!",
+                                     cdp.scoin_symbol));
+    }
+
+    return priceFeedCache.GetMedianPrice(PriceCoinPair(cdp.bcoin_symbol, quoteSymbol));
+}
+
+
+CUniversalContractStore RPC_PARAM::GetWasmContract(CContractDBCache &contractCache, const CRegID &regid) {
+    CUniversalContractStore contract_store;
+    CHAIN_ASSERT( contractCache.GetContract(regid, contract_store),
+                  wasm_chain::contract_exception,
+                  "cannot get contract '%s'",
+                  regid.ToString())
+
+    CHAIN_ASSERT( contract_store.vm_type == VMType::WASM_VM,
+                  wasm_chain::vm_type_mismatch, "vm type must be WASM_VM")
+
+    CHAIN_ASSERT( contract_store.abi.size() > 0,
+                  wasm_chain::abi_not_found_exception, "contract abi is empty")
+    return contract_store;
+}
+
+CBlock RPC_PARAM::ReadBlock(CBlockIndex* pBlockIndex) {
+    CBlock block;
+    if (!ReadBlockFromDisk(pBlockIndex, block)) {
+        throw JSONRPCError(RPC_INTERNAL_ERROR, "Can't read block from disk");
+    }
+    return block;
+}
+
+
+/**
+ *  Interest Ratio Formula: ( a / Log10(b + N) )
+ *
+ *  ==> ratio = a / Log10 (b+N)
+ */
+static uint64_t ComputeCDPInterest(CSysParamDBCache &sysParamCache, const CUserCDP &cdp, uint32_t tipHeight) {
+    if (cdp.total_owed_scoins == 0 || cdp.block_height > tipHeight) {
+        return 0;
+    }
+
+    const auto& coinPair = cdp.GetCoinPair();
+
+    list<CCdpInterestParamChange> changes;
+    if (!sysParamCache.GetCdpInterestParamChanges(coinPair, cdp.block_height, tipHeight, changes)) {
+        throw JSONRPCError(RPC_INTERNAL_ERROR, strprintf("get cdp interest param changes error! coinPiar=%s",
+                                    coinPair.ToString()));
+    }
+
+    uint64_t interest = 0;
+    for (auto &change : changes) {
+        interest += ::ComputeCDPInterest(cdp.total_owed_scoins, change.begin_height, change.end_height,
+                                        change.param_a, change.param_b);
+    }
+
+    return interest;
+}
+
+Object RPC_PARAM::CdpToJson(const CUserCDP &cdp, uint32_t tipHeight) {
+
+    uint64_t bcoinMedianPrice = GetPriceByCdp(*pCdMan->pPriceFeedCache, cdp);
+    uint64_t interest = ComputeCDPInterest(*pCdMan->pSysParamCache, cdp, tipHeight);
+
+    int32_t blockInterval = tipHeight >= cdp.block_height ? tipHeight - cdp.block_height : 0;
+    int32_t interestDays    = std::max<int32_t>(1, ceil((double)blockInterval / SysCfg().GetOneDayBlocks(tipHeight)));
+
+    auto obj = cdp.ToJson(bcoinMedianPrice);
+    obj.push_back(Pair("interest_due", interest));
+    obj.push_back(Pair("interest_days", interestDays));
+    return obj;
 }

@@ -12,37 +12,18 @@
 bool CBlockRewardTx::CheckTx(CTxExecuteContext &context) { return true; }
 
 bool CBlockRewardTx::ExecuteTx(CTxExecuteContext &context) {
-    CCacheWrapper &cw       = *context.pCw;
     CValidationState &state = *context.pState;
-
-    CAccount account;
-    if (!cw.accountCache.GetAccount(txUid, account)) {
-        return state.DoS(100, ERRORMSG("CBlockRewardTx::ExecuteTx, read source addr %s account info error",
-            txUid.ToString()), UPDATE_ACCOUNT_FAIL, "bad-read-accountdb");
-    }
 
     if (0 == context.index) {
         // When the reward transaction is immature, should NOT update account's balances.
     } else if (-1 == context.index) {
         // When the reward transaction is mature, update account's balances, i.e, assign the reward value to
         // the target account.
-        if (!account.OperateBalance(SYMB::WICC, ADD_FREE, reward_fees)) {
+        if (!sp_tx_account->OperateBalance(SYMB::WICC, ADD_FREE, reward_fees, ReceiptType::BLOCK_REWARD_TO_MINER, receipts))
             return state.DoS(100, ERRORMSG("CBlockRewardTx::ExecuteTx, opeate account failed"), UPDATE_ACCOUNT_FAIL,
                              "operate-account-failed");
-        }
-
-        CReceipt receipt(nullId, txUid, SYMB::WICC, reward_fees, ReceiptCode::BLOCK_REWARD_TO_MINER);
-        if (!cw.txReceiptCache.SetTxReceipts(GetHash(), {receipt})) {
-            return state.DoS(100, ERRORMSG("CBlockRewardTx::ExecuteTx, set tx receipts failed!! txid=%s",
-                            GetHash().ToString()), REJECT_INVALID, "set-tx-receipt-failed");
-        }
     } else {
         return ERRORMSG("CBlockRewardTx::ExecuteTx, invalid index");
-    }
-
-    if (!cw.accountCache.SetAccount(CUserID(account.keyid), account)) {
-        return state.DoS(100, ERRORMSG("CBlockRewardTx::ExecuteTx, write secure account info error"),
-                         UPDATE_ACCOUNT_FAIL, "bad-save-accountdb");
     }
 
     return true;
@@ -56,10 +37,10 @@ string CBlockRewardTx::ToString(CAccountDBCache &accountCache) {
                      GetHash().ToString(), nVersion, txUid.ToString(), keyId.GetHex(), reward_fees);
 }
 
-Object CBlockRewardTx::ToJson(const CAccountDBCache &accountCache) const {
+Object CBlockRewardTx::ToJson(CCacheWrapper &cw) const {
     Object result;
     CKeyID keyId;
-    accountCache.GetKeyId(txUid, keyId);
+    cw.accountCache.GetKeyId(txUid, keyId);
 
     result.push_back(Pair("txid",           GetHash().GetHex()));
     result.push_back(Pair("tx_type",        GetTxType(nTxType)));
@@ -75,15 +56,7 @@ Object CBlockRewardTx::ToJson(const CAccountDBCache &accountCache) const {
 bool CUCoinBlockRewardTx::CheckTx(CTxExecuteContext &context) { return true; }
 
 bool CUCoinBlockRewardTx::ExecuteTx(CTxExecuteContext &context) {
-    CCacheWrapper &cw       = *context.pCw;
     CValidationState &state = *context.pState;
-
-    CAccount account;
-    if (!cw.accountCache.GetAccount(txUid, account)) {
-        return state.DoS(
-            100, ERRORMSG("CUCoinBlockRewardTx::ExecuteTx, read source addr %s account info error", txUid.ToString()),
-            UPDATE_ACCOUNT_FAIL, "bad-read-accountdb");
-    }
 
     int32_t index = context.index;
     if (0 == index) {
@@ -91,40 +64,25 @@ bool CUCoinBlockRewardTx::ExecuteTx(CTxExecuteContext &context) {
     } else if (-1 == index) {
         // When the reward transaction is mature, update account's balances, i.e, assgin the reward values to
         // the target account.
-        vector<CReceipt> receipts;
         for (const auto &item : reward_fees) {
             uint64_t rewardAmount  = item.second;
             TokenSymbol coinSymbol = item.first;
-            // FIXME: support WICC/WUSD only.
             if (coinSymbol == SYMB::WICC || coinSymbol == SYMB::WUSD) {
-                if (!account.OperateBalance(coinSymbol, ADD_FREE, rewardAmount)) {
+                if (!sp_tx_account->OperateBalance(coinSymbol, ADD_FREE, rewardAmount, ReceiptType::BLOCK_REWARD_TO_MINER, receipts)) {
                     return state.DoS(100, ERRORMSG("CUCoinBlockRewardTx::ExecuteTx, opeate account failed"),
                                      UPDATE_ACCOUNT_FAIL, "operate-account-failed");
                 }
-                receipts.emplace_back(nullId, txUid, coinSymbol, rewardAmount, ReceiptCode::COIN_BLOCK_REWARD_TO_MINER);
             } else {
                 return ERRORMSG("CUCoinBlockRewardTx::ExecuteTx, invalid coin type");
             }
         }
 
         // Assign profits to the delegate's account.
-        if (!account.OperateBalance(SYMB::WICC, ADD_FREE, inflated_bcoins)) {
+        if (!sp_tx_account->OperateBalance(SYMB::WICC, ADD_FREE, inflated_bcoins, ReceiptType::COIN_BLOCK_INFLATE, receipts))
             return state.DoS(100, ERRORMSG("CUCoinBlockRewardTx::ExecuteTx, opeate account failed"),
                              UPDATE_ACCOUNT_FAIL, "operate-account-failed");
-        }
-        receipts.emplace_back(nullId, txUid, SYMB::WICC, inflated_bcoins, ReceiptCode::COIN_BLOCK_INFLATE);
-
-        if (!cw.txReceiptCache.SetTxReceipts(GetHash(), receipts)) {
-            return state.DoS(100, ERRORMSG("CUCoinBlockRewardTx::ExecuteTx, set tx receipts failed!! txid=%s",
-                            GetHash().ToString()), REJECT_INVALID, "set-tx-receipt-failed");
-        }
     } else {
         return ERRORMSG("CUCoinBlockRewardTx::ExecuteTx, invalid index");
-    }
-
-    if (!cw.accountCache.SetAccount(CUserID(account.keyid), account)) {
-        return state.DoS(100, ERRORMSG("CUCoinBlockRewardTx::ExecuteTx, write secure account info error"),
-                         UPDATE_ACCOUNT_FAIL, "bad-save-accountdb");
     }
 
     return true;
@@ -144,10 +102,10 @@ string CUCoinBlockRewardTx::ToString(CAccountDBCache &accountCache) {
                      inflated_bcoins, valid_height);
 }
 
-Object CUCoinBlockRewardTx::ToJson(const CAccountDBCache &accountCache) const {
+Object CUCoinBlockRewardTx::ToJson(CCacheWrapper &cw) const {
     Object result;
     CKeyID keyId;
-    accountCache.GetKeyId(txUid, keyId);
+    cw.accountCache.GetKeyId(txUid, keyId);
 
     Object rewards;
     for (const auto &item : reward_fees) {

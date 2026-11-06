@@ -53,41 +53,6 @@ namespace DEX_DB {
     void BlockOrdersToJson(const BlockOrders &orderList, Object &obj);
 };
 
-class CDEXOrdersGetter {
-public:
-    uint32_t    begin_height    = 0;        // the begin block height of returned orders
-    uint32_t    end_height      = 0;        // the end block height of returned orders
-    bool        has_more        = false;    // has more orders in db
-    DEXBlockOrdersCache::KeyType  last_key;       // the key of last position to get more orders
-    DEX_DB::BlockOrders orders;             // the returned orders
-private:
-    DEXBlockOrdersCache &db_cache;
-    CDBAccess &db_access;
-public:
-    CDEXOrdersGetter(DEXBlockOrdersCache &dbCache)
-        : db_cache(dbCache), db_access(*dbCache.GetDbAccessPtr()) {
-    }
-
-    bool Execute(uint32_t fromHeight, uint32_t toHeight, uint32_t maxCount, const DEXBlockOrdersCache::KeyType &lastPosInfo);
-    void ToJson(Object &obj);
-};
-
-
-class CDEXSysOrdersGetter {
-public:
-    DEX_DB::BlockOrders orders; // exec result
-private:
-    DEXBlockOrdersCache &db_cache;
-    CDBAccess &db_access;
-public:
-    CDEXSysOrdersGetter(DEXBlockOrdersCache &dbCache)
-        : db_cache(dbCache), db_access(*dbCache.GetDbAccessPtr()) {
-    }
-    bool Execute(uint32_t height);
-
-    void ToJson(Object &obj);
-};
-
 class CDexDBCache {
 public:
     CDexDBCache() {}
@@ -96,7 +61,6 @@ public:
           blockOrdersCache(pDbAccess),
           operator_detail_cache(pDbAccess),
           operator_owner_map_cache(pDbAccess),
-          operator_trade_pair_cache(pDbAccess),
           operator_last_id_cache(pDbAccess) {};
 
 
@@ -111,7 +75,7 @@ public:
     bool GetDexOperator(const DexID &id, DexOperatorDetail& detail);
     bool GetDexOperatorByOwner(const CRegID &regid, DexID &id, DexOperatorDetail& detail);
     bool HaveDexOperator(const DexID &id);
-    bool HaveDexOperatorByOwner(const CRegID &regid);
+    bool HasDexOperatorByOwner(const CRegID &regid);
     bool CreateDexOperator(const DexID &id, const DexOperatorDetail& detail);
     bool UpdateDexOperator(const DexID &id, const DexOperatorDetail& old_detail,
         const DexOperatorDetail& detail);
@@ -122,7 +86,6 @@ public:
         operator_detail_cache.Flush(),
         operator_owner_map_cache.Flush();
         operator_last_id_cache.Flush();
-        operator_trade_pair_cache.Flush();
         return true;
     }
 
@@ -131,8 +94,7 @@ public:
             blockOrdersCache.GetCacheSize() +
             operator_detail_cache.GetCacheSize() +
             operator_owner_map_cache.GetCacheSize() +
-            operator_last_id_cache.GetCacheSize() +
-            operator_trade_pair_cache.GetCacheSize();
+            operator_last_id_cache.GetCacheSize();
     }
     void SetBaseViewPtr(CDexDBCache *pBaseIn) {
         activeOrderCache.SetBase(&pBaseIn->activeOrderCache);
@@ -140,7 +102,6 @@ public:
         operator_detail_cache.SetBase(&pBaseIn->operator_detail_cache);
         operator_owner_map_cache.SetBase(&pBaseIn->operator_owner_map_cache);
         operator_last_id_cache.SetBase(&pBaseIn->operator_last_id_cache);
-        operator_trade_pair_cache.SetBase(&pBaseIn->operator_trade_pair_cache);
     };
 
     void SetDbOpLogMap(CDBOpLogMap *pDbOpLogMapIn) {
@@ -149,7 +110,6 @@ public:
         operator_detail_cache.SetDbOpLogMap(pDbOpLogMapIn);
         operator_owner_map_cache.SetDbOpLogMap(pDbOpLogMapIn);
         operator_last_id_cache.SetDbOpLogMap(pDbOpLogMapIn);
-        operator_trade_pair_cache.SetDbOpLogMap(pDbOpLogMapIn);
     }
 
     void RegisterUndoFunc(UndoDataFuncMap &undoDataFuncMap) {
@@ -158,23 +118,13 @@ public:
         operator_detail_cache.RegisterUndoFunc(undoDataFuncMap);
         operator_owner_map_cache.RegisterUndoFunc(undoDataFuncMap);
         operator_last_id_cache.RegisterUndoFunc(undoDataFuncMap);
-        operator_trade_pair_cache.RegisterUndoFunc(undoDataFuncMap);
     }
 
-    shared_ptr<CDEXOrdersGetter> CreateOrdersGetter() {
-        assert(blockOrdersCache.GetBasePtr() == nullptr && "only support top level cache");
-        return make_shared<CDEXOrdersGetter>(blockOrdersCache);
-    }
-
-    shared_ptr<CDEXSysOrdersGetter> CreateSysOrdersGetter() {
-        assert(blockOrdersCache.GetBasePtr() == nullptr && "only support top level cache");
-        return make_shared<CDEXSysOrdersGetter>(blockOrdersCache);
-    }
 private:
     DEXBlockOrdersCache::KeyType MakeBlockOrderKey(const uint256 &orderid, const dex::CDEXOrderDetail &activeOrder) {
         return make_tuple(CFixedUInt32(activeOrder.tx_cord.GetHeight()), (uint8_t)activeOrder.generate_type, orderid);
     }
-private:
+public:
 /*       type               prefixType                      key                        value                variable             */
 /*  ----------------   -----------------------------  ---------------------------  ------------------   ------------------------ */
     /////////// DexDB
@@ -183,10 +133,7 @@ private:
     DEXBlockOrdersCache    blockOrdersCache;
     CCompositeKVCache< dbk::DEX_OPERATOR_DETAIL,       std::optional<CVarIntValue<DexID>> , DexOperatorDetail >   operator_detail_cache;
     CCompositeKVCache< dbk::DEX_OPERATOR_OWNER_MAP,    CRegIDKey,               std::optional<CVarIntValue<DexID>>> operator_owner_map_cache;
-    CCompositeKVCache< dbk::DEX_OPERATOR_TRADE_PAIR,   std::optional<CVarIntValue<DexID>>, vector<CAssetTradingPair>> operator_trade_pair_cache ;
-
     CSimpleKVCache<dbk::DEX_OPERATOR_LAST_ID, CVarIntValue<DexID>> operator_last_id_cache;
-
 
 };
 

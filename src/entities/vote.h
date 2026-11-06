@@ -12,11 +12,10 @@
 #include <vector>
 #include <unordered_map>
 
-#include "commons/json/json_spirit_utils.h"
-#include "commons/json/json_spirit_value.h"
 #include "key.h"
 #include "crypto/hash.h"
 #include "entities/id.h"
+#include "config/chainparams.h"
 
 enum VoteType : uint8_t {
     NULL_VOTE   = 0,  //!< invalid vote operate
@@ -96,15 +95,14 @@ public:
 
         obj.push_back(json_spirit::Pair("vote_type", GetVoteType(voteType)));
         obj.push_back(json_spirit::Pair("candidate_uid", candidateUid.ToJson()));
-        obj.push_back(json_spirit::Pair("voted_bcoins", votedBcoins));
+        obj.push_back(json_spirit::Pair("voted_bcoins", JsonValueFromAmount(votedBcoins)));
 
         return obj;
     }
 
     string ToString() const {
-        string str = strprintf("voteType: %s, candidateUid: %s, votes: %lld\n", GetVoteType(voteType),
-                               candidateUid.ToString(), votedBcoins);
-        return str;
+        return strprintf("voteType: %s, candidateUid: %s, votes: %f\n",
+                        GetVoteType(voteType), candidateUid.ToString(), votedBcoins);
     }
 
 private:
@@ -146,13 +144,13 @@ public:
         json_spirit::Object obj;
 
         obj.push_back(json_spirit::Pair("candidate_uid", candidate_uid.ToJson()));
-        obj.push_back(json_spirit::Pair("voted_bcoins", voted_bcoins));
+        obj.push_back(json_spirit::Pair("voted_bcoins", JsonValueFromAmount(voted_bcoins)));
 
         return obj;
     }
 
     string ToString() const {
-        string str = strprintf("candidate_uid: %s, voted_bcoins: %lld \n", candidate_uid.ToString(), voted_bcoins);
+        string str = strprintf("candidate_uid: %s, voted_bcoins: %f \n", candidate_uid.ToString(), voted_bcoins);
         return str;
     }
 
@@ -172,6 +170,9 @@ struct VoteDelegate {
     CRegID regid;       // the voted delegate regid
     uint64_t votes = 0;     // the received votes
 
+    VoteDelegate() {}
+    VoteDelegate(const CRegID &regidIn, uint64_t votesIn) : regid(regidIn), votes(votesIn) {}
+
     IMPLEMENT_SERIALIZE(
         READWRITE(regid);
         READWRITE(VARINT(votes));
@@ -179,6 +180,11 @@ struct VoteDelegate {
 
     friend bool operator==(const VoteDelegate &a, const VoteDelegate &b) {
         return (a.regid == b.regid && a.votes == b.votes);
+    }
+
+    string ToString() const {
+        return strprintf("regid=%s", regid.ToString()) + ", " +
+                strprintf("votes=%llu", votes);
     }
 };
 
@@ -228,6 +234,16 @@ struct PendingDelegates {
         state = VoteDelegateState::NONE;
         counted_vote_height = 0;
         top_vote_delegates.clear();
+    }
+
+    string ToString() const {
+        string delegatesStr;
+        for (const auto &item : top_vote_delegates)
+            delegatesStr += "{" + item.ToString() + "},\n";
+        return strprintf("state=%d", (int)state/*TODO:... */) + "," +
+                strprintf("counted_vote_height=%d", counted_vote_height) + ", " +
+                strprintf("delegate_num=%d", top_vote_delegates.size()) + ", " +
+                strprintf("top_vote_delegates=[%s]", delegatesStr);
     }
 };
 

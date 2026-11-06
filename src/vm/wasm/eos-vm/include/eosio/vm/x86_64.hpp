@@ -13,6 +13,7 @@
 #include <cstring>
 #include <variant>
 #include <vector>
+#include <cpuid.h>
 
 
 namespace eosio { namespace vm {
@@ -509,37 +510,37 @@ namespace eosio { namespace vm {
 
       void emit_i32_load8_s(uint32_t /*alignment*/, uint32_t offset) {
          auto icount = variable_size_instr(8, 16);
-         // movsbl (RAX), EAX; 
+         // movsbl (RAX), EAX;
          emit_load_impl(offset, 0x0F, 0xbe, 0x00);
       }
 
       void emit_i32_load16_s(uint32_t /*alignment*/, uint32_t offset) {
          auto icount = variable_size_instr(8, 16);
-         // movswl (RAX), EAX; 
+         // movswl (RAX), EAX;
          emit_load_impl(offset, 0x0F, 0xbf, 0x00);
       }
 
       void emit_i32_load8_u(uint32_t /*alignment*/, uint32_t offset) {
          auto icount = variable_size_instr(8, 16);
-         // movzbl (RAX), EAX; 
+         // movzbl (RAX), EAX;
          emit_load_impl(offset, 0x0f, 0xb6, 0x00);
       }
 
       void emit_i32_load16_u(uint32_t /*alignment*/, uint32_t offset) {
          auto icount = variable_size_instr(8, 16);
-         // movzwl (RAX), EAX; 
+         // movzwl (RAX), EAX;
          emit_load_impl(offset, 0x0f, 0xb7, 0x00);
       }
 
       void emit_i64_load8_s(uint32_t /*alignment*/, uint32_t offset) {
          auto icount = variable_size_instr(9, 17);
-         // movsbq (RAX), RAX; 
+         // movsbq (RAX), RAX;
          emit_load_impl(offset, 0x48, 0x0F, 0xbe, 0x00);
       }
 
       void emit_i64_load16_s(uint32_t /*alignment*/, uint32_t offset) {
          auto icount = variable_size_instr(9, 17);
-         // movswq (RAX), RAX; 
+         // movswq (RAX), RAX;
          emit_load_impl(offset, 0x48, 0x0F, 0xbf, 0x00);
       }
 
@@ -551,13 +552,13 @@ namespace eosio { namespace vm {
 
       void emit_i64_load8_u(uint32_t /*alignment*/, uint32_t offset) {
          auto icount = variable_size_instr(8, 16);
-         // movzbl (RAX), EAX; 
+         // movzbl (RAX), EAX;
          emit_load_impl(offset, 0x0f, 0xb6, 0x00);
       }
 
       void emit_i64_load16_u(uint32_t /*alignment*/, uint32_t offset) {
          auto icount = variable_size_instr(8, 16);
-         // movzwl (RAX), EAX; 
+         // movzwl (RAX), EAX;
          emit_load_impl(offset, 0x0f, 0xb7, 0x00);
       }
 
@@ -1035,25 +1036,65 @@ namespace eosio { namespace vm {
 
       // --------------- i32 unops ----------------------
 
-      // FIXME: detect whether lzcnt/tzcnt are supported
+      bool has_tzcnt_impl() {
+         unsigned a, b, c, d;
+         return __get_cpuid_count(7, 0, &a, &b, &c, &d) && (b & bit_BMI) &&
+                __get_cpuid(0x80000001, &a, &b, &c, &d) && (c & bit_LZCNT);
+      }
+
+      bool has_tzcnt() {
+         static bool result = has_tzcnt_impl();
+         return result;
+      }
+
       void emit_i32_clz() {
-         auto icount = fixed_size_instr(6);
-         // popq %rax
-         emit_bytes(0x58);
-         // lzcntl %eax, %eax
-         emit_bytes(0xf3, 0x0f, 0xbd, 0xc0);
-         // pushq %rax
-         emit_bytes(0x50);
+         auto icount = fixed_size_instr(has_tzcnt()?6:18);
+         if(!has_tzcnt()) {
+            // pop %rax
+            emit_bytes(0x58);
+            // mov $-1, %ecx
+            emit_bytes(0xb9, 0xff, 0xff, 0xff, 0xff);
+            // bsr %eax, %eax
+            emit_bytes(0x0f, 0xbd, 0xc0);
+            // cmovz %ecx, %eax
+            emit_bytes(0x0f, 0x44, 0xc1);
+            // sub $31, %eax
+            emit_bytes(0x83, 0xe8, 0x1f);
+            // neg %eax
+            emit_bytes(0xf7, 0xd8);
+            // push %rax
+            emit_bytes(0x50);
+         } else {
+            // popq %rax
+            emit_bytes(0x58);
+            // lzcntl %eax, %eax
+            emit_bytes(0xf3, 0x0f, 0xbd, 0xc0);
+            // pushq %rax
+            emit_bytes(0x50);
+         }
       }
 
       void emit_i32_ctz() {
-         auto icount = fixed_size_instr(6);
-         // popq %rax
-         emit_bytes(0x58);
-         // tzcntl %eax, %eax
-         emit_bytes(0xf3, 0x0f, 0xbc, 0xc0);
-         // pushq %rax
-         emit_bytes(0x50);
+         auto icount = fixed_size_instr(has_tzcnt()?6:13);
+         if(!has_tzcnt()) {
+            // pop %rax
+            emit_bytes(0x58);
+            // mov $32, %ecx
+            emit_bytes(0xb9, 0x20, 0x00, 0x00, 0x00);
+            // bsf %eax, %eax
+            emit_bytes(0x0f, 0xbc, 0xc0);
+            // cmovz %ecx, %eax
+            emit_bytes(0x0f, 0x44, 0xc1);
+            // push %rax
+            emit_bytes(0x50);
+         } else {
+            // popq %rax
+            emit_bytes(0x58);
+            // tzcntl %eax, %eax
+            emit_bytes(0xf3, 0x0f, 0xbc, 0xc0);
+            // pushq %rax
+            emit_bytes(0x50);
+         }
       }
 
       void emit_i32_popcnt() {
@@ -1155,25 +1196,54 @@ namespace eosio { namespace vm {
 
       // --------------- i64 unops ----------------------
 
-      // FIXME: detect whether lzcnt/tzcnt are supported
       void emit_i64_clz() {
-         auto icount = fixed_size_instr(7);
-         // popq %rax
-         emit_bytes(0x58);
-         // lzcntq %eax, %eax
-         emit_bytes(0xf3, 0x48, 0x0f, 0xbd, 0xc0);
-         // pushq %rax
-         emit_bytes(0x50);
+         auto icount = fixed_size_instr(has_tzcnt()?7:24);
+         if(!has_tzcnt()) {
+            // pop %rax
+            emit_bytes(0x58);
+            // mov $-1, %ecx
+            emit_bytes(0x48, 0xc7, 0xc1, 0xff, 0xff, 0xff, 0xff);
+            // bsr %eax, %eax
+            emit_bytes(0x48, 0x0f, 0xbd, 0xc0);
+            // cmovz %ecx, %eax
+            emit_bytes(0x48, 0x0f, 0x44, 0xc1);
+            // sub $63, %eax
+            emit_bytes(0x48, 0x83, 0xe8, 0x3f);
+            // neg %eax
+            emit_bytes(0x48, 0xf7, 0xd8);
+            // push %rax
+            emit_bytes(0x50);
+         } else {
+            // popq %rax
+            emit_bytes(0x58);
+            // lzcntq %eax, %eax
+            emit_bytes(0xf3, 0x48, 0x0f, 0xbd, 0xc0);
+            // pushq %rax
+            emit_bytes(0x50);
+         }
       }
 
       void emit_i64_ctz() {
-         auto icount = fixed_size_instr(7);
-         // popq %rax
-         emit_bytes(0x58);
-         // tzcntq %eax, %eax
-         emit_bytes(0xf3, 0x48, 0x0f, 0xbc, 0xc0);
-         // pushq %rax
-         emit_bytes(0x50);
+         auto icount = fixed_size_instr(has_tzcnt()?7:17);
+         if(!has_tzcnt()) {
+            // pop %rax
+            emit_bytes(0x58);
+            // mov $64, %ecx
+            emit_bytes(0x48, 0xc7, 0xc1, 0x40, 0x00, 0x00, 0x00);
+            // bsf %eax, %eax
+            emit_bytes(0x48, 0x0f, 0xbc, 0xc0);
+            // cmovz %ecx, %eax
+            emit_bytes(0x48, 0x0f, 0x44, 0xc1);
+            // push %rax
+            emit_bytes(0x50);
+         } else {
+            // popq %rax
+            emit_bytes(0x58);
+            // tzcntq %eax, %eax
+            emit_bytes(0xf3, 0x48, 0x0f, 0xbc, 0xc0);
+            // pushq %rax
+            emit_bytes(0x50);
+         }
       }
 
       void emit_i64_popcnt() {
@@ -1277,7 +1347,7 @@ namespace eosio { namespace vm {
 
       void emit_f32_abs() {
          auto icount = fixed_size_instr(7);
-         // popq %rax; 
+         // popq %rax;
          emit_bytes(0x58);
          // andl 0x7fffffff, %eax
          emit_bytes(0x25);
@@ -1439,7 +1509,7 @@ namespace eosio { namespace vm {
 
       void emit_f32_copysign() {
          auto icount = fixed_size_instr(16);
-         // popq %rax; 
+         // popq %rax;
          emit_bytes(0x58);
          // andl 0x80000000, %eax
          emit_bytes(0x25);
@@ -1454,12 +1524,12 @@ namespace eosio { namespace vm {
          // pushq %rax
          emit_bytes(0x50);
       }
-      
+
       // --------------- f64 unops ----------------------
 
       void emit_f64_abs() {
          auto icount = fixed_size_instr(15);
-         // popq %rcx; 
+         // popq %rcx;
          emit_bytes(0x59);
          // movabsq $0x7fffffffffffffff, %rax
          emit_bytes(0x48, 0xb8);
@@ -1472,7 +1542,7 @@ namespace eosio { namespace vm {
 
       void emit_f64_neg() {
          auto icount = fixed_size_instr(15);
-         // popq %rcx; 
+         // popq %rcx;
          emit_bytes(0x59);
          // movabsq $0x8000000000000000, %rax
          emit_bytes(0x48, 0xb8);
@@ -1625,7 +1695,7 @@ namespace eosio { namespace vm {
 
       void emit_f64_copysign() {
          auto icount = fixed_size_instr(25);
-         // popq %rcx; 
+         // popq %rcx;
          emit_bytes(0x59);
          // movabsq 0x8000000000000000, %rax
          emit_bytes(0x48, 0xb8);
@@ -1722,7 +1792,7 @@ namespace eosio { namespace vm {
       }
 
       void emit_i64_extend_u_i32() { /* Nothing to do */ }
-      
+
       void emit_i64_trunc_s_f32() {
          auto icount = softfloat_instr(35, 37);
          if constexpr (use_softfloat) {
@@ -1987,7 +2057,7 @@ namespace eosio { namespace vm {
          // movsd %xmm0, (%rsp)
          emit_bytes(0xf2, 0x0f, 0x11, 0x04, 0x24);
       }
-      
+
       void emit_i32_reinterpret_f32() { /* Nothing to do */ }
       void emit_i64_reinterpret_f64() { /* Nothing to do */ }
       void emit_f32_reinterpret_i32() { /* Nothing to do */ }
@@ -2323,7 +2393,7 @@ namespace eosio { namespace vm {
                emit_bytes(0xf3, 0x0f, 0x10, 0x44, 0x24, 0x08);
                // cmpCCss (%rsp), %xmm0
                emit_bytes(0xf3, 0x0f, 0xc2, 0x04, 0x24, opcode);
-            }               
+            }
             // movd %xmm0, %eax
             emit_bytes(0x66, 0x0f, 0x7e, 0xc0);
             if (!flip_result) {
@@ -2388,7 +2458,7 @@ namespace eosio { namespace vm {
                emit_bytes(0xf2, 0x0f, 0x10, 0x44, 0x24, 0x08);
                // cmpCCsd (%rsp), %xmm0
                emit_bytes(0xf2, 0x0f, 0xc2, 0x04, 0x24, opcode);
-            }               
+            }
             // movd %xmm0, %eax
             emit_bytes(0x66, 0x0f, 0x7e, 0xc0);
             if (!flip_result) {
@@ -2554,5 +2624,5 @@ namespace eosio { namespace vm {
       static void on_type_error() { vm::throw_<wasm_interpreter_exception>( "call_indirect incorrect function type" ); }
       static void on_stack_overflow() { vm::throw_<wasm_interpreter_exception>( "stack overflow" ); }
    };
-   
+
 }}

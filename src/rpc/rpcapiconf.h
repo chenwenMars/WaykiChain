@@ -13,14 +13,16 @@
 //
 
 static const CRPCCommand vRPCCommands[] =
-{ //  name                      actor (function)         okSafeMode threadSafe reqWallet
-  //  ------------------------  -----------------------  ---------- ---------- ---------
+{ //  name                      actor (function)                            okSafeMode threadSafe reqWallet
+  //  ------------------------  -----------------------                     ---------- ---------- ---------
     /* Overall control/query calls */
     { "help",                           &help,                              true,      true,        false   },
     { "getinfo",                        &getinfo,                           true,      false,       false   }, /* uses wallet if enabled */
     { "stop",                           &stop,                              true,      true,        false   },
     { "validateaddr",                   &validateaddr,                      true,      true,        false   },
     { "createmulsig",                   &createmulsig,                      true,      true ,       false   },
+    { "getfinblockcount",               &getfinblockcount,                  true,      true ,       false   },
+    { "getrewardinfo",                  &getrewardinfo,                     true,      false,       false   }, /* uses wallet if enabled */
 
     /* P2P networking */
     { "getnetworkinfo",                 &getnetworkinfo,                    true,      false,       false   },
@@ -39,19 +41,19 @@ static const CRPCCommand vRPCCommands[] =
     { "getrawmempool",                  &getrawmempool,                     true,      false,       false   },
     { "verifychain",                    &verifychain,                       true,      false,       false   },
     { "getblockundo",                   &getblockundo,                      true,      false,       false   },
+    { "getswapcoindetail",              &getswapcoindetail,                 true,      false,        false   },
 
     { "gettotalcoins",                  &gettotalcoins,                     true,      false,       false   },
     { "invalidateblock",                &invalidateblock,                   true,      true,        false   },
     { "reconsiderblock",                &reconsiderblock,                   true,      true,        false   },
+    
     /* Mining */
-    { "getmininginfo",                  &getmininginfo,                     true,      false,       false    },
-    { "submitblock",                    &submitblock,                       true,      false,       false    },
-    { "getminedblocks",                 &getminedblocks,                    true,      true,        false    },
-    { "getminerbyblocktime",            &getminerbyblocktime,               true,      true,        false    },
-    /* Raw transactions */
-    { "genmulsigtx",                    &genmulsigtx,                       true,      false,       false   },
+    { "getmininginfo",                  &getmininginfo,                     true,      false,       false   },
+    { "submitblock",                    &submitblock,                       true,      false,       false   },
+    { "getminedblocks",                 &getminedblocks,                    true,      true,        false   },
+    { "getminerbyblocktime",            &getminerbyblocktime,               true,      true,        false   },
+    
     /* uses wallet if enabled */
-    { "addmulsigaddr",                  &addmulsigaddr,                     false,     false,       true    },
     { "getaccountinfo",                 &getaccountinfo,                    true,      false,       true    },
     { "getnewaddr",                     &getnewaddr,                        false,     false,       true    },
     { "gettxdetail",                    &gettxdetail,                       true,      false,       true    },
@@ -60,7 +62,7 @@ static const CRPCCommand vRPCCommands[] =
 
     { "dumpprivkey",                    &dumpprivkey,                       false,     false,       true    },
     { "importprivkey",                  &importprivkey,                     false,     false,       true    },
-    { "dropminermainkeys",                  &dropminermainkeys,                     false,     false,       true    },
+    { "dropminermainkeys",              &dropminermainkeys,                 false,     false,       true    },
     { "dropprivkey",                    &dropprivkey,                       false,     false,       true    },
     { "backupwallet",                   &backupwallet,                      false,     false,       true    },
     { "dumpwallet",                     &dumpwallet,                        false,     false,       true    },
@@ -82,33 +84,44 @@ static const CRPCCommand vRPCCommands[] =
     { "getcoinunitinfo",                &getcoinunitinfo,                   true,      false,       false   },
     { "getcontractassets",              &getcontractassets,                 true,      false,       true    },
     { "listcontractassets",             &listcontractassets,                true,      false,       true    },
-    { "signtxraw",                      &signtxraw,                         true,      false,       true    },
     { "getcontractaccountinfo",         &getcontractaccountinfo,            true,      false,       true    },
     { "getsignature",                   &getsignature,                      true,      false,       true    },
     { "listdelegates",                  &listdelegates,                     true,      false,       true    },
     { "decodetxraw",                    &decodetxraw,                       true,       false,      false   },
-    { "decodemulsigscript",             &decodemulsigscript,                true,       false,      false   },
-    /* submit raw tx */
+    { "signtxraw",                      &signtxraw,                         true,      false,       true    },
     { "submittxraw",                    &submittxraw,                       true,       false,      false   },
+    { "droptxfrommempool",              &droptxfrommempool,                 true,       false,      false   },
+
     /* basic tx */
     { "submitsendtx",                   &submitsendtx,                      false,      false,      true    },
-    { "submitcreateutxotx",             &submitcreateutxotx,                false,      false,      true    },
-    { "submitutxospendtx",              &submitutxospendtx,                 false,      false,      true    },
+    { "submitsendmultitx",              &submitsendmultitx,                 false,      false,      true    },
+    { "submitpasswordprooftx",          &submitpasswordprooftx,             false,      false,      true    },
+    { "submitutxotransfertx",           &submitutxotransfertx,              false,      false,      true    },
     { "submitaccountregistertx",        &submitaccountregistertx,           false,      false,      true    },
-    { "submitnickidregistertx",         &submitnickidregistertx,            false,      false,      true    },
+    { "submitaccountpermscleartx",      &submitaccountpermscleartx,         false,      false,      true    },
 
-    { "submitcontractdeploytx",         &submitcontractdeploytx,            false,      false,      true    },
-    { "submitcontractcalltx",           &submitcontractcalltx,              false,      false,      true    },
+    { "submitluacontractdeploytx",      &submitluacontractdeploytx,         false,      false,      true    }, //deprecated
+    { "submitluacontractcalltx",        &submitluacontractcalltx,           false,      false,      true    },
     { "submitdelegatevotetx",           &submitdelegatevotetx,              false,      false,      true    },
     { "submitucontractdeploytx",        &submitucontractdeploytx,           false,      false,      true    },
     { "submitucontractcalltx",          &submitucontractcalltx,             false,      false,      true    },
-
     { "submitparamgovernproposal",      &submitparamgovernproposal,         false,      false,      true    },
     { "submitcdpparamgovernproposal",   &submitcdpparamgovernproposal,      false,      false,      true    },
+    { "submittotalbpssizeupdateproposal",&submittotalbpssizeupdateproposal, false,      false,      true    },
+    { "submitcointransferproposal",     &submitcointransferproposal,        false,      false,      true    },
+    { "submitcancelorderproposal",      &submitcancelorderproposal,         false,      false,      true    },
 
-    { "submitgovernerupdateproposal",   &submitgovernerupdateproposal,      false,      false,      true    },
+    { "submitgovernorupdateproposal",   &submitgovernorupdateproposal,      false,      false,      true    },
     { "submitdexswitchproposal",        &submitdexswitchproposal,           false,      false,      true    },
+    { "submitfeedcoinpairproposal",     &submitfeedcoinpairproposal,        false,      false,      true    },
     { "submitminerfeeproposal",         &submitminerfeeproposal,            false,      false,      true    },
+    { "submitaxcinproposal",            &submitaxcinproposal,               false,      false,      true    },
+    { "submitaxcoutproposal",           &submitaxcoutproposal,              false,      false,      true    },
+    { "submitaxccoinproposal",          &submitaxccoinproposal,             false,      false,      true    },
+    { "submitdiaissueproposal",         &submitdiaissueproposal,            false,      false,      true    },
+
+    { "submitaccountpermproposal",      &submitaccountpermproposal,         false,      false,      true    },
+    { "submitassetpermproposal",        &submitassetpermproposal,           false,      false,      true    },
 
     { "submitproposalapprovaltx",       &submitproposalapprovaltx,          false,      false,      true    },
     /* for CDP */
@@ -118,45 +131,53 @@ static const CRPCCommand vRPCCommands[] =
     { "submitcdpredeemtx",              &submitcdpredeemtx,                 false,      false,      true    },
     { "submitcdpliquidatetx",           &submitcdpliquidatetx,              false,      false,      true    },
     { "getscoininfo",                   &getscoininfo,                      true,       false,      false   },
-    { "getcdp",                         &getcdp,                            true,       false,      false   },
+    { "getcdpinfo",                     &getcdpinfo,                        true,       false,      false   },
     { "getusercdp",                     &getusercdp,                        true,       false,      false   },
-    { "getcdpcoinpairs",                &getcdpcoinpairs,                   true,       false,      false   },
-
     { "getsysparam",                    &getsysparam,                       true,       false,      false   },
+    { "listsysparams",                  &listsysparams,                     true,       false,      false   },
     { "getcdpparam",                    &getcdpparam,                       true,       false,      false   },
     { "getproposal",                    &getproposal,                       true,       false,      false   },
-    { "getminminerfee",                 &getminminerfee,                    true,       false,      false   },
+    { "getgovernors",                   &getgovernors,                      true,       false,      false   },
+    { "listmintxfees",                  &listmintxfees,                     true,       false,      false   },
     /* for dex */
     { "submitdexbuylimitordertx",       &submitdexbuylimitordertx,          false,      false,      false   },
     { "submitdexselllimitordertx",      &submitdexselllimitordertx,         false,      false,      false   },
     { "submitdexbuymarketordertx",      &submitdexbuymarketordertx,         false,      false,      false   },
     { "submitdexsellmarketordertx",     &submitdexsellmarketordertx,        false,      false,      false   },
+
     { "gendexoperatorordertx",          &gendexoperatorordertx,             false,      false,      false   },
     { "submitdexsettletx",              &submitdexsettletx,                 false,      false,      false   },
     { "submitdexcancelordertx",         &submitdexcancelordertx,            false,      false,      false   },
     { "submitdexoperatorregtx",         &submitdexoperatorregtx,            false,      false,      false   },
-    { "submitdexoperatorupdatetx",      &submitdexoperatorupdatetx,         false,      false,      false   },
+    { "submitdexopupdatetx",            &submitdexopupdatetx,               false,      false,      false   },
     { "getdexorder",                    &getdexorder,                       true,       false,      false   },
-    { "getdexsysorders",                &getdexsysorders,                   true,       false,      false   },
-    { "getdexorders",                   &getdexorders,                      true,       false,      false   },
+    { "listdexsysorders",               &listdexsysorders,                  true,       false,      false   },
+    { "listdexorders",                  &listdexorders,                     true,       false,      false   },
     { "getdexoperator",                 &getdexoperator,                    true,       false,      false   },
     { "getdexoperatorbyowner",          &getdexoperatorbyowner,             true,       false,      false   },
     { "getdexorderfee",                 &getdexorderfee,                    true,       false,      false   },
+    { "getdexbaseandquotecoins",        &getdexbaseandquotecoins,           true,       false,      false   },
+    { "gettotalbpssize",                &gettotalbpssize,                   true,       false,      false   },
+    { "getfeedcoinpairs",               &getfeedcoinpairs,                  true,       false,      false   },
+    
     /* for asset */
-    { "submitassetissuetx",             &submitassetissuetx,                false,      false,      false   },
-    { "submitassetupdatetx",            &submitassetupdatetx,               false,      false,      false   },
-    { "getasset",                       &getasset,                          true,       false,      false   },
-    { "getassets",                      &getassets,                         true,       false,      false   },
-    /* for wasm */
-    { "submitwasmcontractdeploytx",     &submitwasmcontractdeploytx,        true,       false,      true    },
-    { "submitwasmcontractcalltx",       &submitwasmcontractcalltx,          true,       false,      true    },
-    { "gettablewasm",                   &gettablewasm,                      true,       false,      true    },
-    { "jsontobinwasm",                  &jsontobinwasm,                     true,       false,      true    },
-    { "bintojsonwasm",                  &bintojsonwasm,                     true,       false,      true    },
-    { "getcodewasm",                    &getcodewasm,                       true,       false,      true    },
-    { "getabiwasm",                     &getabiwasm,                        true,       false,      true    },
-    { "gettxtrace",                     &gettxtrace,                        true,       false,      true    },
-    { "abidefjsontobinwasm",            &abidefjsontobinwasm,               true,       false,      true    },
+    { "getassetinfo",                   &getassetinfo,                      true,       false,      false   },
+    { "listassets",                     &listassets,                        true,       false,      false   },
+
+    /* for wasm-based universal contract deploy & invocation tx submission */
+    { "submitsetcodetx",                &submitsetcodetx,                   true,       false,      true    },
+    { "submittx",                       &submittx,                          true,       false,      true    },
+
+    { "wasm_gettable",                  &wasm_gettable,                      true,       false,      true    },
+    { "wasm_getrow",                    &wasm_getrow,                        true,       false,      true    },
+    { "wasm_json2bin",                  &wasm_json2bin,                      true,       false,      true    },
+    { "wasm_bin2json",                  &wasm_bin2json,                      true,       false,      true    },
+    { "wasm_getcode",                   &wasm_getcode,                       true,       false,      true    },
+    { "wasm_getabi",                    &wasm_getabi,                        true,       false,      true    },
+    { "wasm_gettxtrace",                &wasm_gettxtrace,                    true,       false,      true    },
+    { "wasm_abidefjson2bin",            &wasm_abidefjson2bin,                true,       false,      true    },
+    { "wasm_getresult",                  &wasm_getresult,                true,       false,      true    },
+    
     /* for test code */
     { "disconnectblock",                &disconnectblock,                   true,       false,      true    },
     { "reloadtxcache",                  &reloadtxcache,                     true,       false,      true    },
@@ -165,9 +186,32 @@ static const CRPCCommand vRPCCommands[] =
     { "gethash",                        &gethash,                           true,       false,      true    },
     { "startcommontpstest",             &startcommontpstest,                true,       true,       false   },
     { "startcontracttpstest",           &startcontracttpstest,              true,       true,       false   },
+    { "startwasmtpstest",               &startwasmtpstest,                  true,       true,       false   },
     { "getblockfailures",               &getblockfailures,                  true,       false,      false   },
+    
     /* vm functions work in vm simulator */
-    { "vmexecutescript",                &vmexecutescript,                   true,       true,       true    },
+    { "luavm_executescript",            &luavm_executescript,               true,       false,       true    },
+    { "luavm_executecontract",          &luavm_executecontract,             true,       false,       true    },
+
+    /* debug */
+    { "dumpdb",                         &dumpdb,                            true,       false,       false    },
+    { "getmemstat",                     &getmemstat,                        true,       false,       false    },
+
+#ifdef ENABLE_GPERFTOOLS
+    { "startheapprofiler",              &startheapprofiler,                 true,       false,       false    },
+    { "stopheapprofiler",               &stopheapprofiler,                  true,       false,       false    },
+    { "getheapprofiler",                &getheapprofiler,                   true,       false,       false    },
+    { "dumpheapprofiler",               &dumpheapprofiler,                  true,       false,       false    },
+#endif//DENABLE_GPERFTOOLS
+
+    /* UTXO */
+    { "genutxomultiinputcondhash",      &genutxomultiinputcondhash,         true,       false,       false   },
+    { "genutxomultisignaddr",           &genutxomultisignaddr,              true,       false,       false   },
+    { "genutxomultisignature",          &genutxomultisignature,             true,       false,       false   },
+    
+    /* abi tx serializer*/
+    { "genunsignedtxraw",                &genunsignedtxraw,                   true,      false,       false   },
+
 };
 
 #endif //RPC_APICONF_H_

@@ -9,17 +9,19 @@
 
 #include "commons/messagequeue.h"
 #include "commons/uint256.h"
+#include "commons/util/util.h"
 #include "config/configuration.h"
 #include "init.h"
-#include "commons/json/json_spirit_value.h"
 #include "main.h"
 #include "rpc/core/rpcserver.h"
+#include "rpc/core/rpccommons.h"
 #include "sync.h"
-#include "tx/merkletx.h"
 #include "tx/tx.h"
-#include "tx/coinrewardtx.h"
+#include "tx/coinminttx.h"
+#include "tx/universaltx.h"
 #include "wallet/wallet.h"
-#include "persistence/blockundo.h"
+#include "wasm/abi_serializer.hpp"
+#include "wasm/modules/wasm_native_dispatch.hpp"
 
 using namespace json_spirit;
 using namespace std;
@@ -28,32 +30,34 @@ class CBaseCoinTransferTx;
 
 Object BlockToJSON(const CBlock& block, const CBlockIndex* pBlockIndex) {
     Object result;
-    result.push_back(Pair("block_hash",     block.GetHash().GetHex()));
-    result.push_back(Pair("block_miner",    block.vptx[0]->txUid.ToString()));
-
-    CMerkleTx txGen(block.vptx[0]);
-    txGen.SetMerkleBranch(&block);
-    result.push_back(Pair("confirmations",  (int32_t)txGen.GetDepthInMainChain()));
-    result.push_back(Pair("size",           (int32_t)::GetSerializeSize(block, SER_NETWORK, PROTOCOL_VERSION)));
-    result.push_back(Pair("height",         (int32_t)block.GetHeight()));
-    result.push_back(Pair("version",        block.GetVersion()));
-    result.push_back(Pair("merkle_root",    block.GetMerkleRootHash().GetHex()));
-    result.push_back(Pair("tx_count",       (int32_t)block.vptx.size()));
-    Array txs;
-    for (const auto& ptx : block.vptx)
-        txs.push_back(ptx->GetHash().GetHex());
-    result.push_back(Pair("tx",             txs));
-    result.push_back(Pair("time",           block.GetBlockTime()));
-    result.push_back(Pair("nonce",          (uint64_t)block.GetNonce()));
-
+    result.push_back(Pair("curr_block_hash",     block.GetHash().GetHex()));
     if (pBlockIndex->pprev)
-        result.push_back(Pair("previous_block_hash", pBlockIndex->pprev->GetBlockHash().GetHex()));
+        result.push_back(Pair("prev_block_hash", pBlockIndex->pprev->GetBlockHash().GetHex()));
     CBlockIndex* pNext = chainActive.Next(pBlockIndex);
     if (pNext)
         result.push_back(Pair("next_block_hash", pNext->GetBlockHash().GetHex()));
 
+    result.push_back(Pair("bp_uid",         block.vptx[0]->txUid.ToString()));
+    result.push_back(Pair("version",        block.GetVersion()));
+    result.push_back(Pair("merkle_root",    block.GetMerkleRootHash().GetHex()));
+    result.push_back(Pair("fuel_rate", block.GetFuelRate()));
+    result.push_back(Pair("total_fuel_fee", block.GetFuelFee()));
+    result.push_back(Pair("confirmations",  (int32_t)chainActive.Height() - pBlockIndex->height + 1));
+    result.push_back(Pair("size",           (int32_t)::GetSerializeSize(block, SER_NETWORK, PROTOCOL_VERSION)));
+    result.push_back(Pair("height",         (int32_t)block.GetHeight()));
+    result.push_back(Pair("tx_count",       (int32_t)block.vptx.size()));
+
+    Array txs;
+    for (const auto& ptx : block.vptx)
+        txs.push_back(ptx->GetHash().GetHex());
+    result.push_back(Pair("tx",             txs));
+
+    result.push_back(Pair("time",           block.GetBlockTime()));
+    result.push_back(Pair("nonce",          (uint64_t)block.GetNonce()));
+
     Array prices;
-    for (auto &item : block.GetBlockMedianPrice()) {
+    const auto& priceMap = block.GetBlockMedianPrice();
+    for (const auto &item : priceMap) {
         if (item.second == 0) {
             continue;
         }
@@ -86,23 +90,23 @@ Value getfcoingenesistxinfo(const Array& params, bool fHelp) {
     Object output;
 
     NET_TYPE netType = SysCfg().NetworkID();
-    uint32_t nStableCoinGenesisHeight           = IniCfg().GetStableCoinGenesisHeight(netType);
+    uint32_t nVer2GenesisHeight = IniCfg().GetVer2GenesisHeight(netType);
 
     // Stablecoin Global Reserve Account with its initial reseve creation
-    auto pTx      = std::make_shared<CCoinRewardTx>(CNullID(), nStableCoinGenesisHeight, SYMB::WUSD,
+    auto pTx = std::make_shared<CCoinMintTx>(CNullID(), nVer2GenesisHeight, SYMB::WUSD,
                                                FUND_COIN_GENESIS_INITIAL_RESERVE_AMOUNT * COIN);
     pTx->nVersion = INIT_TX_VERSION;
     output.push_back(Pair("fcoin_global_account_txid", pTx->GetHash().GetHex()));
 
     // FundCoin Genesis Account with the total FundCoin release creation
-    pTx = std::make_shared<CCoinRewardTx>(CPubKey(ParseHex(IniCfg().GetInitFcoinOwnerPubKey(netType))),
-                                          nStableCoinGenesisHeight, SYMB::WGRT,
+    pTx = std::make_shared<CCoinMintTx>(CPubKey(ParseHex(IniCfg().GetInitFcoinOwnerPubKey(netType))),
+                                          nVer2GenesisHeight, SYMB::WGRT,
                                           FUND_COIN_GENESIS_TOTAL_RELEASE_AMOUNT * COIN);
     output.push_back(Pair("fcoin_genesis_account_txid", pTx->GetHash().GetHex()));
 
     // DEX Order Matching Service Account
-    pTx = std::make_shared<CCoinRewardTx>(CPubKey(ParseHex(IniCfg().GetDexMatchServicePubKey(netType))),
-                                          nStableCoinGenesisHeight, SYMB::WGRT, 0);
+    pTx = std::make_shared<CCoinMintTx>(CPubKey(ParseHex(IniCfg().GetDexMatchServicePubKey(netType))),
+                                          nVer2GenesisHeight, SYMB::WGRT, 0);
     output.push_back(Pair("dex_match_account_txid", pTx->GetHash().GetHex()));
 
     return output;
@@ -145,14 +149,14 @@ Value getrawmempool(const Array& params, bool fHelp)
         Object obj;
         for (const auto& entry : mempool.memPoolTxs) {
             const uint256& hash      = entry.first;
-            const CTxMemPoolEntry& e = entry.second;
+            const CTxMemPoolEntry& mpe = entry.second;
             Object info;
-            info.push_back(Pair("size",         (int)e.GetTxSize()));
-            info.push_back(Pair("fees_type",    std::get<0>(e.GetFees())));
-            info.push_back(Pair("fees",         ValueFromAmount(std::get<1>(e.GetFees()))));
-            info.push_back(Pair("time",         e.GetTime()));
-            info.push_back(Pair("height",       (int)e.GetHeight()));
-            info.push_back(Pair("priority",     e.GetPriority()));
+            info.push_back(Pair("size",         (int) mpe.GetTxSize()));
+            info.push_back(Pair("fees_type",    std::get<0>(mpe.GetFees())));
+            info.push_back(Pair("fees",         JsonValueFromAmount(std::get<1>(mpe.GetFees()))));
+            info.push_back(Pair("time",         mpe.GetTime()));
+            info.push_back(Pair("height",       (int) mpe.GetHeight()));
+            info.push_back(Pair("priority",     mpe.GetPriority()));
 
             obj.push_back(Pair(hash.ToString(), info));
         }
@@ -171,15 +175,16 @@ Value getrawmempool(const Array& params, bool fHelp)
 }
 
 Value getblock(const Array& params, bool fHelp) {
-    if (fHelp || params.size() < 1 || params.size() > 2) {
+    if (fHelp || params.size() < 1 || params.size() > 3) {
         throw runtime_error(
-            "getblock \"hash or height\" [\"verbose\"]\n"
+            "getblock \"hash or height\"  [\"list_txs\"] [\"verbose\"]\n"
             "\nIf verbose is false, returns a string that is serialized, hex-encoded data for block 'hash'.\n"
             "If verbose is true, returns an Object with information about block <hash>.\n"
             "\nArguments:\n"
             "1.\"hash or height\"   (string or numeric, required) string for the block hash, or numeric for the block "
             "height\n"
-            "2.\"verbose\"          (boolean, optional, default=true) true for a json object, false for the hex "
+            "2.\"list_txs\"         (boolean, optional, default=false) true: return a detailed list of txes from the block\n"
+            "3.\"verbose\"          (boolean, optional, default=true) true: return a json object; false: return hex only\n"
             "encoded data\n"
             "\nResult (for verbose = true):\n"
             "{\n"
@@ -222,9 +227,14 @@ Value getblock(const Array& params, bool fHelp) {
     }
     uint256 hash(uint256S(strHash));
 
-    bool fVerbose = true;
+    bool fListTxs = false;
     if (params.size() > 1)
-        fVerbose = params[1].get_bool();
+        fListTxs = params[1].get_bool();
+
+    bool fVerbose = true;
+    if (params.size() > 2)
+        fVerbose = params[2].get_bool();
+
 
     if (mapBlockIndex.count(hash) == 0)
         throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Block not found");
@@ -242,7 +252,22 @@ Value getblock(const Array& params, bool fHelp) {
         return strHex;
     }
 
-    return BlockToJSON(block, pBlockIndex);
+    vector<CReceipt> blockReceipts;
+    Object o = BlockToJSON(block, pBlockIndex);
+
+    auto pCw = make_shared<CCacheWrapper>(pCdMan);
+    if(fListTxs) {
+        Array arr;
+        for (size_t i = 0; i < block.vptx.size(); i++) {
+            arr.push_back(GetTxDetailJSON(*pCw, block, block.vptx[i], CTxCord(block.GetHeight(), i)));
+        }
+        o.push_back(Pair("tx_details", arr));
+    }
+
+    pCdMan->pReceiptCache->GetBlockReceipts(block.GetHash(), blockReceipts);
+    o.push_back(Pair("receipts",  JSON::ToJson(*pCdMan->pAccountCache, blockReceipts)));
+
+    return o;
 }
 
 Value verifychain(const Array& params, bool fHelp) {
@@ -349,19 +374,21 @@ Value invalidateblock(const Array& params, bool fHelp) {
 }
 
 Value reconsiderblock(const Array& params, bool fHelp) {
-    if (fHelp || params.size() != 1) {
+    if (fHelp || params.size() < 1 || params.size() > 2) {
         throw runtime_error(
-            "reconsiderblock \"hash\"\n"
+            "reconsiderblock \"hash\" [children]\n"
             "\nRemoves invalidity status of a block and its descendants, reconsider them for activation.\n"
             "This can be used to undo the effects of invalidateblock.\n"
             "\nArguments:\n"
             "1. hash   (string, required) the hash of the block to reconsider\n"
+            "2. children (bool, optional) reconsider all children of the block, default is false"
             "\nResult:\n"
             "\nExamples:\n"
-            + HelpExampleRpc("reconsiderblock", "\"hash\""));
+            + HelpExampleRpc("reconsiderblock", "\"hash\" false"));
     }
 
     std::string strHash = params[0].get_str();
+    bool children = params.size() > 1 ? params[1].get_bool() : false;
     uint256 hash(uint256S(strHash));
     CValidationState state;
 
@@ -371,7 +398,7 @@ Value reconsiderblock(const Array& params, bool fHelp) {
             throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Block not found");
 
         CBlockIndex* pBlockIndex = mapBlockIndex[hash];
-        ReconsiderBlock(state, pBlockIndex);
+        ReconsiderBlock(state, pBlockIndex, children);
     }
 
     if (state.IsValid()) {
@@ -387,10 +414,90 @@ Value reconsiderblock(const Array& params, bool fHelp) {
     return obj;
 }
 
-static unique_ptr<MsgQueue<CBaseCoinTransferTx>> generationQueue;
 
-void static CommonTxGenerator(const int64_t period, const int64_t batchSize) {
-    RenameThread("CommonTxGenerator");
+class TpsTester {
+public:
+    typedef MsgQueue<std::shared_ptr<CBaseTx>> GenTxQueue;
+public:
+    int64_t period;
+    int64_t batchSize;
+    unique_ptr<GenTxQueue> generationQueue;
+    boost::thread_group* generateThreads;
+public:
+    TpsTester() {
+
+    }
+
+    ~TpsTester() {
+        Stop();
+    }
+
+    void Stop() {
+        if (generateThreads != nullptr) {
+            if(generationQueue) {
+                generationQueue->Clear();
+            }
+            generateThreads->interrupt_all();
+            generateThreads->join_all();
+            delete generateThreads;
+            generateThreads = nullptr;
+            generationQueue = nullptr;
+        }
+    }
+
+    void SendTx() {
+        RenameThread("coin-tpssend");
+        SetThreadPriority(THREAD_PRIORITY_NORMAL);
+
+        CValidationState state;
+        std::shared_ptr<CBaseTx> tx;
+
+        while (true) {
+            // add interruption point
+            boost::this_thread::interruption_point();
+
+            if (generationQueue->Pop(&tx)) {
+                LOCK(cs_main);
+                if (!::AcceptToMemoryPool(mempool, state, tx.get(), true)) {
+                    LogPrint(BCLog::ERROR, "TpsTester::SendTx, accept to mempool failed: %s\n", state.GetRejectReason());
+                    throw boost::thread_interrupted();
+                }
+            }
+        }
+    }
+
+    template<typename F>
+    void StartCommonGeneration(const int64_t periodIn, const int64_t batchSizeIn, F generateFunc) {
+
+        Stop();
+
+        period = periodIn;
+        batchSize = batchSizeIn;
+        if (period == 0 || batchSize == 0)
+            return;
+
+        // reset message queue according to <period, batchSize>
+        // For example, generate 50(batchSize) transactions in 20(period), then
+        // we need to prepare 1000 * 10 / 20 * 50 = 25,000 transactions in 10 second.
+        // Actually, set the message queue's size to 50,000(double or up to 60,000).
+        GenTxQueue::SizeType size       = 1000 * 10 * batchSize * 2 / period;
+        GenTxQueue::SizeType actualSize = size > MSG_QUEUE_MAX_LEN ? MSG_QUEUE_MAX_LEN : size;
+
+        generationQueue = std::make_unique<GenTxQueue>(actualSize);
+
+        generateThreads = new boost::thread_group();
+        generateThreads->create_thread(generateFunc);
+        generateThreads->create_thread(boost::bind(&TpsTester::SendTx, this));
+    }
+
+
+};
+
+TpsTester g_tpsTester = TpsTester();
+
+
+static void CommonTxGenerator(TpsTester *tpsTester) {
+    RenameThread("coin-gentxcomm");
     SetThreadPriority(THREAD_PRIORITY_NORMAL);
 
     CCoinSecret vchSecret;
@@ -403,12 +510,17 @@ void static CommonTxGenerator(const int64_t period, const int64_t batchSize) {
         if (!pWalletMain->RemoveKey(key))
             throw boost::thread_interrupted();
     }
+    shared_ptr<CCacheWrapper> spCw;
+    uint64_t llFees         = 0;
+    {
+        LOCK(cs_main);
+        spCw = make_shared<CCacheWrapper>(pCdMan);
+        GetTxMinFee(*spCw, BCOIN_TRANSFER_TX, chainActive.Height(), SYMB::WICC, llFees);
+    }
 
     CRegID srcRegId("0-1");
     CRegID desRegId("0-1");
     static uint64_t llValue = 10000;  // use static variable to keep autoincrement
-    uint64_t llFees         = 0;
-    GetTxMinFee(BCOIN_TRANSFER_TX, chainActive.Height(), SYMB::WICC, llFees);
 
     while (true) {
         // add interruption point
@@ -417,75 +529,34 @@ void static CommonTxGenerator(const int64_t period, const int64_t batchSize) {
         int64_t nStart      = GetTimeMillis();
         int32_t validHeight = chainActive.Height();
 
-        for (int64_t i = 0; i < batchSize; ++i) {
-            CBaseCoinTransferTx tx;
-            tx.txUid        = srcRegId;
-            tx.toUid        = desRegId;
-            tx.coin_amount  = llValue++;
-            tx.llFees       = llFees;
-            tx.valid_height = validHeight;
+        for (int64_t i = 0; i < tpsTester->batchSize; ++i) {
+            std::shared_ptr<CBaseCoinTransferTx> tx = make_shared<CBaseCoinTransferTx>();
+            tx->txUid        = srcRegId;
+            tx->toUid        = desRegId;
+            tx->coin_amount  = llValue++;
+            tx->llFees       = llFees;
+            tx->valid_height = validHeight;
 
             // sign transaction
-            key.Sign(tx.GetHash(), tx.signature);
+            key.Sign(tx->GetHash(), tx->signature);
 
-            generationQueue.get()->Push(std::move(tx));
+            tpsTester->generationQueue->Push(tx);
         }
 
         int64_t elapseTime = GetTimeMillis() - nStart;
-        LogPrint(BCLog::DEBUG, "CommonTxGenerator, batch generate transaction(s): %ld, elapse time: %ld ms.\n", batchSize,
-                 elapseTime);
-        if (elapseTime < period) {
-            MilliSleep(period - elapseTime);
+        LogPrint(BCLog::DEBUG, "batch generate transaction(s): %ld, elapse time: %ld ms.\n",
+                tpsTester->batchSize, elapseTime);
+
+        if (elapseTime < tpsTester->period) {
+            MilliSleep(tpsTester->period - elapseTime);
         } else {
-            LogPrint(BCLog::DEBUG, "CommonTxGenerator, need to slow down for overloading.\n");
-        }
-    }
-}
-
-void static CommonTxSender() {
-    RenameThread("CommonTxSender");
-    SetThreadPriority(THREAD_PRIORITY_NORMAL);
-
-    CValidationState state;
-    CBaseCoinTransferTx tx;
-
-    while (true) {
-        // add interruption point
-        boost::this_thread::interruption_point();
-
-        if (generationQueue.get()->Pop(&tx)) {
-            LOCK(cs_main);
-            if (!::AcceptToMemoryPool(mempool, state, (CBaseTx*)&tx, true)) {
-                LogPrint(BCLog::ERROR, "CommonTxSender, accept to mempool failed: %s\n", state.GetRejectReason());
-                throw boost::thread_interrupted();
-            }
+            LogPrint(BCLog::DEBUG, "need to slow down for overloading.\n");
         }
     }
 }
 
 void StartCommonGeneration(const int64_t period, const int64_t batchSize) {
-    static boost::thread_group* generateThreads = nullptr;
-
-    if (generateThreads != nullptr) {
-        generateThreads->interrupt_all();
-        delete generateThreads;
-        generateThreads = nullptr;
-    }
-
-    if (period == 0 || batchSize == 0)
-        return;
-
-    // reset message queue according to <period, batchSize>
-    // For example, generate 50(batchSize) transactions in 20(period), then
-    // we need to prepare 1000 * 10 / 20 * 50 = 25,000 transactions in 10 second.
-    // Actually, set the message queue's size to 50,000(double or up to 60,000).
-    MsgQueue<CBaseCoinTransferTx>::SizeType size       = 1000 * 10 * batchSize * 2 / period;
-    MsgQueue<CBaseCoinTransferTx>::SizeType actualSize = size > MSG_QUEUE_MAX_LEN ? MSG_QUEUE_MAX_LEN : size;
-    generationQueue.reset(new MsgQueue<CBaseCoinTransferTx>(actualSize));
-
-    generateThreads = new boost::thread_group();
-    generateThreads->create_thread(boost::bind(&CommonTxGenerator, period, batchSize));
-    generateThreads->create_thread(boost::bind(&CommonTxSender));
+    g_tpsTester.StartCommonGeneration(period, batchSize, boost::bind(&CommonTxGenerator, &g_tpsTester));
 }
 
 Value startcommontpstest(const Array& params, bool fHelp) {
@@ -524,10 +595,8 @@ Value startcommontpstest(const Array& params, bool fHelp) {
     return obj;
 }
 
-static unique_ptr<MsgQueue<CLuaContractInvokeTx>> generationContractQueue;
-
-void static ContractTxGenerator(const string& regid, const int64_t period, const int64_t batchSize) {
-    RenameThread("Tx-generator-v2");
+void static ContractTxGenerator(TpsTester *tpsTester, const string& regid) {
+    RenameThread("coin-gentxlua");
     SetThreadPriority(THREAD_PRIORITY_NORMAL);
 
     CCoinSecret vchSecret;
@@ -540,12 +609,16 @@ void static ContractTxGenerator(const string& regid, const int64_t period, const
         if (!pWalletMain->RemoveKey(key))
             throw boost::thread_interrupted();
     }
-
+    shared_ptr<CCacheWrapper> spCw;
+    uint64_t llFees         = 0;
+    {
+        LOCK(cs_main);
+        spCw = make_shared<CCacheWrapper>(pCdMan);
+        GetTxMinFee(*spCw, BCOIN_TRANSFER_TX, chainActive.Height(), SYMB::WICC, llFees);
+    }
     CRegID txUid("0-1");
     CRegID appUid(regid);
     static uint64_t llValue = 10000;  // use static variable to keep autoincrement
-    uint64_t llFees         = 0;
-    GetTxMinFee(LCONTRACT_INVOKE_TX, chainActive.Height(), SYMB::WICC, llFees);
 
     // hex(whmD4M8Q8qbEx6R5gULbcb5ZkedbcRDGY1) =
     // 77686d44344d3851387162457836523567554c626362355a6b656462635244475931
@@ -558,76 +631,34 @@ void static ContractTxGenerator(const string& regid, const int64_t period, const
         int64_t nStart      = GetTimeMillis();
         int32_t validHeight = chainActive.Height();
 
-        for (int64_t i = 0; i < batchSize; ++i) {
-            CLuaContractInvokeTx tx;
-            tx.txUid        = txUid;
-            tx.app_uid      = appUid;
-            tx.coin_amount  = llValue++;
-            tx.llFees       = llFees;
-            tx.arguments    = arguments;
-            tx.valid_height = validHeight;
+        for (int64_t i = 0; i < tpsTester->batchSize; ++i) {
+            shared_ptr<CLuaContractInvokeTx> tx = make_shared<CLuaContractInvokeTx>();
+            tx->txUid        = txUid;
+            tx->app_uid      = appUid;
+            tx->coin_amount  = llValue++;
+            tx->llFees       = llFees;
+            tx->arguments    = arguments;
+            tx->valid_height = validHeight;
 
             // sign transaction
-            key.Sign(tx.GetHash(), tx.signature);
+            key.Sign(tx->GetHash(), tx->signature);
 
-            generationContractQueue.get()->Push(std::move(tx));
+            tpsTester->generationQueue->Push(tx);
         }
 
         int64_t elapseTime = GetTimeMillis() - nStart;
-        LogPrint(BCLog::DEBUG, "ContractTxGenerator, batch generate transaction(s): %ld, elapse time: %ld ms.\n", batchSize,
-                 elapseTime);
-        if (elapseTime < period) {
-            MilliSleep(period - elapseTime);
+        LogPrint(BCLog::DEBUG, "batch generate transaction(s): %ld, elapse time: %ld ms.\n", tpsTester->batchSize, elapseTime);
+
+        if (elapseTime < tpsTester->period) {
+            MilliSleep(tpsTester->period - elapseTime);
         } else {
-            LogPrint(BCLog::DEBUG, "ContractTxGenerator, need to slow down for overloading.\n");
-        }
-    }
-}
-
-void static ContractTxGenerator() {
-    RenameThread("ContractTxGenerator");
-    SetThreadPriority(THREAD_PRIORITY_NORMAL);
-
-    CValidationState state;
-    CLuaContractInvokeTx tx;
-
-    while (true) {
-        // add interruption point
-        boost::this_thread::interruption_point();
-
-        if (generationContractQueue.get()->Pop(&tx)) {
-            LOCK(cs_main);
-            if (!::AcceptToMemoryPool(mempool, state, (CBaseTx*)&tx, true)) {
-                LogPrint(BCLog::ERROR, "ContractTxGenerator, accept to mempool failed: %s\n", state.GetRejectReason());
-                throw boost::thread_interrupted();
-            }
+            LogPrint(BCLog::DEBUG, "need to slow down for overloading.\n");
         }
     }
 }
 
 void StartContractGeneration(const string& regid, const int64_t period, const int64_t batchSize) {
-    static boost::thread_group* generateContractThreads = nullptr;
-
-    if (generateContractThreads != nullptr) {
-        generateContractThreads->interrupt_all();
-        delete generateContractThreads;
-        generateContractThreads = nullptr;
-    }
-
-    if (regid.empty() || period == 0 || batchSize == 0)
-        return;
-
-    // reset message queue according to <period, batchSize>
-    // For example, generate 50(batchSize) transactions in 20(period), then
-    // we need to prepare 1000 * 10 / 20 * 50 = 25,000 transactions in 10 second.
-    // Actually, set the message queue's size to 50,000(double or up to 60,000).
-    MsgQueue<CLuaContractInvokeTx>::SizeType size       = 1000 * 10 * batchSize * 2 / period;
-    MsgQueue<CLuaContractInvokeTx>::SizeType actualSize = size > MSG_QUEUE_MAX_LEN ? MSG_QUEUE_MAX_LEN : size;
-    generationContractQueue.reset(new MsgQueue<CLuaContractInvokeTx>(actualSize));
-
-    generateContractThreads = new boost::thread_group();
-    generateContractThreads->create_thread(boost::bind(&ContractTxGenerator, regid, period, batchSize));
-    generateContractThreads->create_thread(boost::bind(&ContractTxGenerator));
+    g_tpsTester.StartCommonGeneration(period, batchSize, boost::bind(&ContractTxGenerator, &g_tpsTester, regid));
 }
 
 Value startcontracttpstest(const Array& params, bool fHelp) {
@@ -672,6 +703,152 @@ Value startcontracttpstest(const Array& params, bool fHelp) {
     return obj;
 }
 
+
+
+void static WasmTxGenerator(TpsTester *tpsTester, wasm::inline_transaction &inlineTx) {
+    RenameThread("coin-gentxwasm");
+    SetThreadPriority(THREAD_PRIORITY_NORMAL);
+
+    CCoinSecret vchSecret;
+    vchSecret.SetString("Y6J4aK6Wcs4A3Ex4HXdfjJ6ZsHpNZfjaS4B9w7xqEnmFEYMqQd13");
+    CKey key = vchSecret.GetKey();
+
+    // remove key from wallet first.
+    {
+        LOCK2(cs_main, pWalletMain->cs_wallet);
+        if (!pWalletMain->RemoveKey(key))
+            throw boost::thread_interrupted();
+    }
+    shared_ptr<CCacheWrapper> spCw;
+    uint64_t minFees         = 0;
+    {
+        LOCK(cs_main);
+        spCw = make_shared<CCacheWrapper>(pCdMan);
+        GetTxMinFee(*spCw, BCOIN_TRANSFER_TX, chainActive.Height(), SYMB::WICC, minFees);
+    }
+    CRegID txUid("0-1");
+    auto payer      = wasm::regid(txUid.GetIntValue());
+
+    inlineTx.authorization = std::vector<permission>{{payer.value, wasmio_owner}};
+
+    int32_t lastHeight = 0;
+    uint64_t fees = minFees;
+    while (true) {
+        // add interruption point
+        boost::this_thread::interruption_point();
+
+        int64_t nStart      = GetTimeMillis();
+        int32_t validHeight = chainActive.Height();
+        if (lastHeight != validHeight) {
+            fees = minFees;
+            lastHeight = validHeight;
+        }
+
+        for (int64_t i = 0; i < tpsTester->batchSize; ++i) {
+            shared_ptr<CUniversalTx> tx = std::make_shared<CUniversalTx>();
+            tx->txUid        = txUid;
+            tx->fee_symbol   = SYMB::WICC;
+            tx->llFees       = fees;
+            tx->valid_height = validHeight;
+
+            tx->inline_transactions.push_back(inlineTx);
+            // sign transaction
+            key.Sign(tx->GetHash(), tx->signature);
+
+            tpsTester->generationQueue->Push(tx);
+            fees++;
+        }
+
+        int64_t elapseTime = GetTimeMillis() - nStart;
+        LogPrint(BCLog::DEBUG, "batch generate transaction(s): %ld, elapse time: %ld ms.\n", tpsTester->batchSize, elapseTime);
+
+        if (elapseTime < tpsTester->period) {
+            MilliSleep(tpsTester->period - elapseTime);
+        } else {
+            LogPrint(BCLog::DEBUG, "need to slow down for overloading.\n");
+        }
+    }
+}
+
+namespace RPC_PARAM {
+    int64_t ParseInt64(const Value &jsonValue, const string &name) {
+        ComboMoney money;
+        Value_type valueType = jsonValue.type();
+        if (valueType == json_spirit::Value_type::int_type ) {
+            return jsonValue.get_int64();
+        } else if (valueType == json_spirit::Value_type::str_type) {
+            return atoi64(jsonValue.get_str());
+        } else {
+            throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("%s should be numeric or string, but got %s type",
+                name, JSON::GetValueTypeName(valueType)));
+        }
+    }
+}
+
+Value startwasmtpstest(const Array& params, bool fHelp) {
+    if (fHelp || params.size() != 5) {
+        throw runtime_error(
+            "startwasmtpstest \"regid\" \"period\" \"batch_size\"\n"
+            "\nStart generate wasm contract tx for tps with batch_size tx in period ms.\n"
+            "\nArguments:\n"
+            "1.\"regid\" (string, required) contract regid\n"
+            "2.\"action\" (string, required) contract action\n"
+            "3.\"data\" (object, required) contract data, can be object or array\n"
+            "4.\"period\" (numeric, required) 0~1000\n"
+            "5.\"batch_size\" (numeric, required)\n"
+            "\nResult:\n"
+            "\nExamples:\n" +
+            HelpExampleCli("startwasmtpstest", "\"0-1\" \"0-800\" \"transfer\" '["
+                "\"0-1\", \"8-2\", \"1.00000000 WICC\", \"\"]' 20 20") +
+            "\nAs json rpc call\n" +
+            HelpExampleRpc("startwasmtpstest", "\"0-1\", \"0-800\", \"transfer\", ["
+                "\"0-1\", \"8-2\", \"1.00000000 WICC\", \"\"], 20, 20"));
+    }
+    auto regid  = RPC_PARAM::ParseRegId(params[0], "contract");
+    auto action = wasm::name(params[1].get_str());
+    auto argsIn = RPC_PARAM::GetWasmContractArgs(params[2]);
+    int64_t period = RPC_PARAM::ParseInt64(params[3], "period");
+    int64_t batchSize = RPC_PARAM::ParseInt64(params[4], "batch_size");
+
+    if (SysCfg().NetworkID() != REGTEST_NET) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "work in regtest only");
+    }
+
+    //get abi
+    std::vector<char> abi;
+    {
+        LOCK(cs_main);
+        if (!get_native_contract_abi(regid.GetIntValue(), abi)) {
+            CUniversalContractStore contract_store = RPC_PARAM::GetWasmContract(*pCdMan->pContractCache, regid);
+            abi = std::vector<char>(contract_store.abi.begin(), contract_store.abi.end());
+        }
+    }
+
+
+    std::vector<char> action_data = wasm::abi_serializer::pack(abi, action.to_string(), argsIn, max_serialization_time);
+    CHAIN_ASSERT( action_data.size() < MAX_CONTRACT_ARGUMENT_SIZE,
+                    wasm_chain::inline_transaction_data_size_exceeds_exception,
+                    "inline transaction args is out of size(%u vs %u)",
+                    action_data.size(), MAX_CONTRACT_ARGUMENT_SIZE)
+
+
+    if (period < 0 || period > 1000) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "period should range between 0 to 1000");
+    }
+
+    if (batchSize < 0) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "batch size should be bigger than 0");
+    }
+
+    wasm::inline_transaction inlineTx = { regid.GetIntValue(), action.value, {}, action_data };
+
+    g_tpsTester.StartCommonGeneration(period, batchSize, boost::bind(&WasmTxGenerator, &g_tpsTester, inlineTx));
+
+    Object obj;
+    obj.push_back(Pair("msg", "success"));
+    return obj;
+}
+
 Value getblockfailures(const Array& params, bool fHelp) {
     if (fHelp || params.size() != 1) {
         throw runtime_error(
@@ -690,110 +867,24 @@ Value getblockfailures(const Array& params, bool fHelp) {
     if (height < 0 || height > chainActive.Height())
         throw JSONRPCError(RPC_INVALID_PARAMETER, "Block height out of range.");
 
-    vector<std::tuple<uint256, uint8_t, string>> results;
-    if (!pCdMan->pLogCache->GetExecuteFail(height, results)) {
-        throw JSONRPCError(RPC_INTERNAL_ERROR, "Failed to get log failures.");
-    }
+    auto dbIt = MakeDbIterator(pCdMan->pLogCache->executeFailCache);
 
     Object obj;
     Array failures;
     Object failure;
 
-    for (const auto &item : results) {
-        failure.push_back(Pair("txid",          std::get<0>(item).GetHex()));
-        failure.push_back(Pair("error_code",    std::get<1>(item)));
-        failure.push_back(Pair("error_message", std::get<2>(item)));
+    for (dbIt->First(); dbIt->IsValid(); dbIt->Next()) {
+
+    //CCompositeKVCache<dbk::TX_EXECUTE_FAIL,   string,            std::pair<uint8_t, string> > executeFailCache;
+        failure.push_back(Pair("txid",          dbIt->GetKey().second.GetHex()));
+        failure.push_back(Pair("error_code",    dbIt->GetValue().first));
+        failure.push_back(Pair("error_message", dbIt->GetValue().second));
 
         failures.push_back(failure);
     }
 
     obj.push_back(Pair("block_height",  height));
     obj.push_back(Pair("failures",      failures));
-
-    return obj;
-}
-
-
-Value getblockundo(const Array& params, bool fHelp) {
-    if (fHelp || params.size() < 1 || params.size() > 2) {
-        throw runtime_error(
-            "getblockundo \"hash or height\"\n"
-            "\nIf verbose is false, returns a string that is serialized, hex-encoded data for block 'hash'.\n"
-            "If verbose is true, returns an Object with information about block <hash>.\n"
-            "\nArguments:\n"
-            "1.\"hash or height\"   (string or numeric, required) string for the block hash, or numeric for the block "
-                                                                  "height\n"
-
-            "\nResult: block undo object\n"
-            "\nExamples:\n" +
-            HelpExampleCli("getblockundo", "\"d640d051704155b1fd3ec8d0331497448c259b0ab0499e109da7ae2bc7423bc2\"") +
-            "\nAs json rpc\n" +
-            HelpExampleRpc("getblockundo", "\"d640d051704155b1fd3ec8d0331497448c259b0ab0499e109da7ae2bc7423bc2\""));
-    }
-
-    // RPCTypeCheck(params, boost::assign::list_of(str_type)(bool_type)); disable this to allow either string or int argument
-
-    std::string strHash;
-    if (int_type == params[0].type()) {
-        int height = params[0].get_int();
-        if (height < 0 || height > chainActive.Height())
-            throw JSONRPCError(RPC_INVALID_PARAMETER, "Block height out of range.");
-
-        CBlockIndex* pBlockIndex = chainActive[height];
-        strHash                  = pBlockIndex->GetBlockHash().GetHex();
-    } else {
-        strHash = params[0].get_str();
-    }
-    uint256 hash(uint256S(strHash));
-
-    auto mapIt = mapBlockIndex.find(hash);
-    if (mapIt == mapBlockIndex.end())
-        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Block not found");
-
-    CBlockIndex* pBlockIndex = mapIt->second;
-
-    CBlockUndo blockUndo;
-    CDiskBlockPos pos = pBlockIndex->GetUndoPos();
-    if (pos.IsNull())
-        throw JSONRPCError(RPC_INTERNAL_ERROR, strprintf("no undo data available! block=%d:%s",
-            pBlockIndex->height, pBlockIndex->GetBlockHash().ToString()));
-
-    if (!blockUndo.ReadFromDisk(pos, pBlockIndex->pprev->GetBlockHash()))
-        throw JSONRPCError(RPC_INTERNAL_ERROR, strprintf("read undo data failed! block=%d:%s",
-            pBlockIndex->height, pBlockIndex->GetBlockHash().ToString()));
-
-    Object obj;
-    obj.push_back(Pair("block_height",  pBlockIndex->height));
-    obj.push_back(Pair("block_hash",  pBlockIndex->pprev->GetBlockHash().ToString()));
-    obj.push_back(Pair("count", (int64_t)blockUndo.vtxundo.size()));
-    Array txArray;
-    for (size_t i = 0; i < blockUndo.vtxundo.size(); i++) {
-        CTxUndo txUndo = blockUndo.vtxundo[i];
-        Object txObj;
-        txObj.push_back(Pair("index", (int64_t)i));
-        txObj.push_back(Pair("tx_hash",  txUndo.txid.ToString()));
-        Array categoryArray;
-        for (auto opLogPair : txUndo.dbOpLogMap.GetMap()) {
-            const CDbOpLogs &opLogs = opLogPair.second;
-            Object categoryObj;
-            auto prefixType = dbk::ParseKeyPrefixType(opLogPair.first);
-            categoryObj.push_back(Pair("db_prefix", opLogPair.first));
-            categoryObj.push_back(Pair("db_prefix_memo", dbk::GetKeyPrefixMemo(prefixType)));
-            categoryObj.push_back(Pair("log_count", (int64_t)opLogs.size()));
-            Array dbLogArray;
-            for (const CDbOpLog &opLog : opLogs) {
-                Object dbLogObj;
-                dbLogObj.push_back(Pair("key",  HexStr(opLog.GetKey())));
-                dbLogObj.push_back(Pair("value",  HexStr(opLog.GetValue())));
-                dbLogArray.push_back(dbLogObj);
-            }
-            categoryObj.push_back(Pair("db_logs", dbLogArray));
-            categoryArray.push_back(categoryObj);
-        }
-        txObj.push_back(Pair("category", categoryArray));
-        txArray.push_back(txObj);
-    }
-    obj.push_back(Pair("tx_undos", txArray));
 
     return obj;
 }

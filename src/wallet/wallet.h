@@ -50,12 +50,12 @@ private:
     uint256 GetCheckSum() const;
 
 public:
-    CPubKey vchDefaultKey ;
+    CPubKey vchDefaultKey;
 
     bool fFileBacked;
     string strWalletFile;
 
-    map<uint256, CAccountTx> mapInBlockTx;
+    map<uint256, CWalletAccountTxDb> mapInBlockTx;
     map<uint256, std::shared_ptr<CBaseTx> > unconfirmedTx;
     mutable CCriticalSection cs_wallet;
 
@@ -86,10 +86,10 @@ public:
         }
     )
     virtual ~CWallet(){};
-    int64_t GetFreeCoins(TokenSymbol coinSymbol, bool isConfirmed = true) const;
+    uint64_t GetFreeCoins(TokenSymbol coinSymbol, bool isConfirmed = true) const;
 
     bool Sign(const CKeyID &keyId, const uint256 &hash, vector<unsigned char> &signature, bool isMiner = false) const;
-    bool SignCompact(const CKeyID &keyId, const uint256 &hash, vector<uint8_t> &signature, bool isMiner = false) const; 
+    bool SignCompact(const CKeyID &keyId, const uint256 &hash, vector<uint8_t> &signature, bool isMiner = false) const;
     //! Adds an encrypted key to the store, and saves it to disk.
     bool AddCryptedKey(const CPubKey &vchPubKey, const std::vector<unsigned char> &vchCryptedSecret);
     bool LoadCryptedKey(const CPubKey &vchPubKey, const std::vector<unsigned char> &vchCryptedSecret);
@@ -109,7 +109,7 @@ public:
     bool DropMainKeysForColdMining();
 
     CWallet(string strWalletFileIn);
-    void SetNull() ;
+    void SetNull();
 
     bool LoadMinVersion(int32_t nVersion);
 
@@ -130,13 +130,13 @@ public:
     bool ChangeWalletPassphrase(const SecureString& strOldWalletPassphrase, const SecureString& strNewWalletPassphrase);
 
     // get the current wallet format (the oldest client version guaranteed to understand this wallet)
-    int32_t GetVersion() ;
+    int32_t GetVersion();
 
     bool SetMinVersion(enum WalletFeature nVersion, CWalletDB* pWalletDbIn);
 
     static CWallet* GetInstance();
 
-    std::tuple<bool,string>  CommitTx(CBaseTx *pTx);
+    bool CommitTx(CBaseTx *pTx, CValidationState &state);
 };
 
 /** Private key that includes an expiration date in case it never gets used. */
@@ -163,62 +163,63 @@ public:
     )
 };
 
-class CAccountTx {
+class CWalletAccountTxDb {
 private:
-    CWallet* pWallet;
+    CWallet* p_wallet;
 
 public:
-    uint256 blockHash;
-    int32_t blockHeight;
-    map<uint256, std::shared_ptr<CBaseTx> > mapAccountTx;
+    uint256 block_hash;
+    int32_t block_height;
+    map<uint256, std::shared_ptr<CBaseTx> > account_tx_map;
+
 public:
-    CAccountTx(CWallet* pWalletIn = NULL, uint256 hash = uint256(), int32_t height = 0) {
-        pWallet = pWalletIn;
-        blockHash = hash;
-        mapAccountTx.clear();
-        blockHeight = height;
+    CWalletAccountTxDb(CWallet* pWalletIn = NULL, uint256 blockHash = uint256(), int32_t blockHeight = 0) {
+        p_wallet = pWalletIn;
+        block_hash = blockHash;
+        block_height = blockHeight;
+        account_tx_map.clear();
     }
 
-    ~CAccountTx() { }
+    ~CWalletAccountTxDb() { }
 
     void BindWallet(CWallet* pWalletIn) {
-        if (pWallet == NULL) {
+        if (p_wallet == NULL) {
             assert(pWalletIn != NULL);
-            pWallet = pWalletIn;
+            p_wallet = pWalletIn;
         }
     }
 
     bool AddTx(const uint256 &hash, const CBaseTx *pTx) {
-        mapAccountTx[hash] = pTx->GetNewInstance();
+        account_tx_map[hash] = pTx->GetNewInstance();
         return true;
     }
 
-    bool HaveTx(const uint256 &hash) {
-        if (mapAccountTx.end() != mapAccountTx.find(hash)) {
+    bool HasTx(const uint256 &hash) {
+        if (account_tx_map.end() != account_tx_map.find(hash)) {
             return true;
         }
         return false;
     }
 
-    bool DelTx(const uint256 &hash) {
-        return mapAccountTx.erase(hash);
-    }
+    // bool DelTx(const uint256 &hash) {
+    //     return account_tx_map.erase(hash);
+    // }
 
     size_t GetTxSize() {
-        return mapAccountTx.size();
+        return account_tx_map.size();
     }
 
     bool WriteToDisk() {
-        return CWalletDB(pWallet->strWalletFile).WriteBlockTx(blockHash, *this);
+        return CWalletDB(p_wallet->strWalletFile).WriteBlockTx(block_hash, *this);
     }
 
     Object ToJsonObj(CKeyID const &key = CKeyID()) const;
 
     IMPLEMENT_SERIALIZE
     (
-        READWRITE(blockHash);
-        READWRITE(blockHeight);
-        READWRITE(mapAccountTx);
+        READWRITE(block_hash);
+        READWRITE(block_height);
+        READWRITE(account_tx_map);
     )
 };
 

@@ -18,6 +18,7 @@
 #include "entities/id.h"
 #include "entities/price.h"
 #include "tx/tx.h"
+#include "persistence/dbaccess.h"
 
 
 #include <stdint.h>
@@ -65,7 +66,7 @@ protected:
     uint32_t nTime;
     uint32_t nNonce;
     uint32_t height;
-    uint64_t nFuel;
+    uint64_t nFuelFee;
     uint32_t nFuelRate;
     vector<unsigned char> vSignature;
 
@@ -81,7 +82,7 @@ public:
         READWRITE(nTime);
         READWRITE(nNonce);
         READWRITE(height);
-        READWRITE(nFuel);
+        READWRITE(nFuelFee);
         READWRITE(nFuelRate);
         READWRITE(vSignature);
     )
@@ -93,7 +94,7 @@ public:
         nTime          = 0;
         nNonce         = 0;
         height         = 0;
-        nFuel          = 0;
+        nFuelFee          = 0;
         nFuelRate      = 100;
         vSignature.clear();
     }
@@ -113,13 +114,17 @@ public:
     void SetNonce(uint32_t nonce) { this->nNonce = nonce; }
     uint32_t GetHeight() const { return height; }
     void SetHeight(uint32_t height);
-    uint32_t GetFuel() const { return nFuel; }
-    void SetFuel(uint64_t fuel) { this->nFuel = fuel; }
+    uint32_t GetFuelFee() const { return nFuelFee; }
+    void SetFuel(uint64_t fuel) { this->nFuelFee = fuel; }
     uint32_t GetFuelRate() const { return nFuelRate; }
     void SetFuelRate(uint32_t fuelRate) { this->nFuelRate = fuelRate; }
     const vector<unsigned char> &GetSignature() const { return vSignature; }
     void SetSignature(const vector<unsigned char> &signature) { this->vSignature = signature; }
     void ClearSignature() { this->vSignature.clear(); }
+
+    string GetIdStr() {
+        return strprintf("[%u]%s", height, GetHash().ToString());
+    }
 };
 
 class CBlock : public CBlockHeader {
@@ -148,19 +153,16 @@ public:
         vMerkleTree.clear();
     }
 
-    CBlockHeader GetBlockHeader() const {
-        CBlockHeader block;
-        block.SetVersion(nVersion);
-        block.SetPrevBlockHash(prevBlockHash);
-        block.SetMerkleRootHash(merkleRootHash);
-        block.SetTime(nTime);
-        block.SetNonce(nNonce);
-        block.SetHeight(height);
-        block.SetFuel(nFuel);
-        block.SetFuelRate(nFuelRate);
-        block.SetSignature(vSignature);
-
-        return block;
+    void GetBlockHeader(CBlockHeader &header) {
+        header.SetVersion(nVersion);
+        header.SetPrevBlockHash(prevBlockHash);
+        header.SetMerkleRootHash(merkleRootHash);
+        header.SetTime(nTime);
+        header.SetNonce(nNonce);
+        header.SetHeight(height);
+        header.SetFuel(nFuelFee);
+        header.SetFuelRate(nFuelRate);
+        header.SetSignature(vSignature);
     }
 
     uint256 BuildMerkleTree() const;
@@ -177,8 +179,8 @@ public:
     static uint256 CheckMerkleBranch(uint256 hash, const vector<uint256> &vMerkleBranch, int32_t index);
 
     map<TokenSymbol, uint64_t> GetFees() const;
-    PriceMap GetBlockMedianPrice() const;
-    CUserID GetMinerUserID() const;
+    const PriceMap& GetBlockMedianPrice() const;
+    const CUserID &GetMinerUserID() const;
 
     void Print() const;
 };
@@ -191,93 +193,41 @@ public:
 class CBlockIndex {
 public:
     // pointer to the hash of the block, if any. memory is owned by this CBlockIndex
-    const uint256 *pBlockHash;
+    const uint256 *pBlockHash = nullptr;
 
     // pointer to the index of the predecessor of this block
-    CBlockIndex *pprev;
+    CBlockIndex *pprev = nullptr;
 
     // pointer to the index of some further predecessor of this block
-    CBlockIndex *pskip;
+    CBlockIndex *pskip = nullptr;
 
     // height of the entry in the chain. The genesis block has height 0
-    int32_t height;
+    int32_t height = 0;
 
     // Which # file this block is stored in (blk?????.dat)
-    int32_t nFile;
+    int32_t nFile = 0;
 
     // Byte offset within blk?????.dat where this block's data is stored
-    uint32_t nDataPos;
+    uint32_t nDataPos = 0;
 
     // Byte offset within rev?????.dat where this block's undo data is stored
-    uint32_t nUndoPos;
-
-    // (memory only) Total amount of work (expected number of hashes) in the chain up to and including this block
-    arith_uint256 nChainWork;
-
-    // Number of transactions in this block.
-    // Note: in a potential headers-first mode, this number cannot be relied upon
-    uint32_t nTx;
-
-    // (memory only) Number of transactions in the chain up to and including this block
-    uint32_t nChainTx;  // change to 64-bit type when necessary; won't happen before 2030
+    uint32_t nUndoPos = 0;
 
     // Verification status of this block. See enum BlockStatus
-    uint32_t nStatus;
+    uint32_t nStatus = 0;
 
     // (memory only) Sequencial id assigned to distinguish order in which blocks are received.
-    uint32_t nSequenceId;
+    uint32_t nSequenceId = 0;
 
     // block header
-    int32_t nVersion;
-    uint256 merkleRootHash;
-    uint256 hashPos;
-    uint32_t nTime;
-    uint32_t nBits;
-    uint32_t nNonce;
-    uint64_t nFuel;
-    uint32_t nFuelRate;
-    vector<unsigned char> vSignature;
+    int32_t nVersion = 0;
+    uint32_t nTime = 0;
+    uint64_t nFuelFee = 0;
+    uint32_t nFuelRate = 0;
 
-    CRegID miner;
-
-    CBlockIndex() {
-        pBlockHash       = nullptr;
-        pprev            = nullptr;
-        pskip            = nullptr;
-        height           = 0;
-        nFile            = 0;
-        nDataPos         = 0;
-        nUndoPos         = 0;
-        nChainWork       = 0;
-        nTx              = 0;
-        nChainTx         = 0;
-        nStatus          = 0;
-        nSequenceId      = 0;
-
-        nVersion       = 0;
-        merkleRootHash = uint256();
-        hashPos        = uint256();
-        nTime          = 0;
-        nBits          = 0;
-        nNonce         = 0;
-        nFuel          = 0;
-        nFuelRate      = INIT_FUEL_RATES;
-        vSignature.clear();
-    }
+    CBlockIndex() {}
 
     CBlockIndex(const CBlock &block) {
-        pBlockHash       = nullptr;
-        pprev            = nullptr;
-        pskip            = nullptr;
-        height           = 0;
-        nFile            = 0;
-        nDataPos         = 0;
-        nUndoPos         = 0;
-        nChainWork       = 0;
-        nTx              = 0;
-        nChainTx         = 0;
-        nStatus          = 0;
-        nSequenceId      = 0;
 
         // int64_t nTxSize = 0;
         // for (auto &pTx : block.vptx) {
@@ -285,16 +235,9 @@ public:
         // }
 
         nVersion       = block.GetVersion();
-        merkleRootHash = block.GetMerkleRootHash();
         nTime          = block.GetTime();
-        nNonce         = block.GetNonce();
-        nFuel          = block.GetFuel();
+        nFuelFee       = block.GetFuelFee();
         nFuelRate      = block.GetFuelRate();
-        vSignature     = block.GetSignature();
-      /*  if(block.GetHeight() == 0 )
-            miner = CRegID("0-1");
-        else
-            miner = block.vptx[0]->txUid.get<CRegID>();*/
     }
 
     CDiskBlockPos GetBlockPos() const {
@@ -314,20 +257,6 @@ public:
         }
 
         return ret;
-    }
-
-    CBlockHeader GetBlockHeader() const {
-        CBlockHeader block;
-        block.SetVersion(nVersion);
-        if (pprev)
-            block.SetPrevBlockHash(pprev->GetBlockHash());
-        block.SetMerkleRootHash(merkleRootHash);
-        block.SetTime(nTime);
-        block.SetNonce(nNonce);
-        block.SetHeight(height);
-        block.SetSignature(vSignature);
-
-        return block;
     }
 
     uint256 GetBlockHash() const { return *pBlockHash; }
@@ -359,12 +288,11 @@ public:
                                 uint32_t nRequired, uint32_t nToCheck);
 
     string ToString() const {
-        return strprintf("CBlockIndex(pprev=%p, height=%d, merkle=%s, blockHash=%s, chainWork=%s, regId=%s)", pprev, height,
-                         merkleRootHash.ToString(), GetBlockHash().ToString(), nChainWork.ToString(), miner.ToString());
+        return strprintf("CBlockIndex(pprev=%p, height=%d)", pprev, height);
     }
 
-    string GetIndentityString() const {
-        return strprintf("%d:%s", height, GetBlockHash().ToString());
+    string GetIdString() const {
+        return strprintf("[%d]%s", height, GetBlockHash().ToString());
     }
 
     void Print() const { LogPrint(BCLog::INFO, "%s\n", ToString()); }
@@ -377,16 +305,55 @@ public:
     const CBlockIndex *GetAncestor(int32_t heightIn) const;
 };
 
+struct CBlockIndexWorkComparator {
+    bool operator()(CBlockIndex *pa, CBlockIndex *pb) const {
+
+        // First sort by most total work, ...
+        if (pa->height != pb->height) {
+            return (pa->height < pb->height);
+        }
+
+        // ... then by earliest time received, ...
+        if (pa->nSequenceId != pb->nSequenceId) {
+            return (pa->nSequenceId > pb->nSequenceId);
+        }
+
+        // Use pointer address as tie breaker (should only happen with blocks
+        // loaded from disk, as those all have id 0).
+
+        return pa > pb;
+    }
+};
 
 /** Used to marshal pointers into hashes for db storage. */
 class CDiskBlockIndex : public CBlockIndex {
 public:
     uint256 hashPrev;
+    uint256 merkleRootHash;
+    uint32_t nBits = 0;
+    uint32_t nNonce = 0;
+    CRegID bp_regid;
 
-    CDiskBlockIndex() : hashPrev(uint256()) {}
+    // Number of transactions in this block.
+    // Note: in a potential headers-first mode, this number cannot be relied upon
+    uint32_t nTx = 0;
+    vector<unsigned char> vSignature;
 
-    explicit CDiskBlockIndex(CBlockIndex *pIndex) : CBlockIndex(*pIndex) {
-        hashPrev = (pprev ? pprev->GetBlockHash() : uint256());
+    // (memory only) Number of transactions in the chain up to and including this block
+    uint32_t nChainTx = 0;  // change to 64-bit type when necessary; won't happen before 2030
+
+    CDiskBlockIndex() {}
+
+    // explicit CDiskBlockIndex(CBlockIndex *pIndex) : CBlockIndex(*pIndex) {
+    //     hashPrev = (pprev ? pprev->GetBlockHash() : uint256());
+    // }
+
+    CDiskBlockIndex(CBlockIndex *pIndex, const CBlock &block, const CRegID &bpRegid): CBlockIndex(*pIndex) {
+        hashPrev       = pprev ? pprev->GetBlockHash() : uint256();
+        merkleRootHash = block.GetMerkleRootHash();
+        nNonce         = block.GetNonce();
+        nTx            = block.vptx.size();
+        bp_regid       = bpRegid;
     }
 
     IMPLEMENT_SERIALIZE(
@@ -407,14 +374,13 @@ public:
         READWRITE(this->nVersion);
         READWRITE(hashPrev);
         READWRITE(merkleRootHash);
-        READWRITE(hashPos);
         READWRITE(nTime);
         READWRITE(nBits);
         READWRITE(nNonce);
-        READWRITE(nFuel);
+        READWRITE(nFuelFee);
         READWRITE(nFuelRate);
         READWRITE(vSignature);
-        READWRITE(miner);)
+        READWRITE(bp_regid);)
 
 
     uint256 GetBlockHash() const {
@@ -425,19 +391,35 @@ public:
         block.SetTime(nTime);
         block.SetNonce(nNonce);
         block.SetHeight(height);
-        block.SetFuel(nFuel);
+        block.SetFuel(nFuelFee);
         block.SetFuelRate(nFuelRate);
         block.SetSignature(vSignature);
         return block.GetHash();
     }
 
+    void GetBlockHeader(CBlockHeader &header) {
+        header.SetVersion(nVersion);
+        header.SetPrevBlockHash(hashPrev);
+        header.SetMerkleRootHash(merkleRootHash);
+        header.SetTime(nTime);
+        header.SetNonce(nNonce);
+        header.SetHeight(height);
+        header.SetSignature(vSignature);
+    }
+
     string ToString() const {
-        string str = "CDiskBlockIndex(";
-        str += CBlockIndex::ToString();
-        str += strprintf("\n                blockHash=%s, hashPrev=%s)",
-                         GetBlockHash().ToString().c_str(),
-                         hashPrev.ToString().c_str());
-        return str;
+        return  TO_KV_STRING1(nVersion) +
+                TO_KV_STRING1(height) +
+                TO_KV_STRING1(nStatus) +
+                TO_KV_STRING1(nTx) +
+                TO_KV_STRING1(hashPrev) +
+                TO_KV_STRING1(bp_regid) +
+                TO_KV_STRING1(merkleRootHash) +
+                TO_KV_STRING1(nTime) +
+                TO_KV_STRING1(nBits) +
+                TO_KV_STRING1(nFuelFee) +
+                TO_KV_STRING1(nFuelRate) +
+                TO_KV_STRING_END2("signature", HexStr(vSignature));
     }
 
     void Print() const {
@@ -487,5 +469,7 @@ bool ReadTxFromDisk(const CTxCord txCord, std::shared_ptr<TxType> &pTx) {
     }
     return true;
 }
+
+bool GetBlockHeader(CBlockIndex *pBlockIndex, CBlockHeader &header);
 
 #endif  // PERSIST_BLOCK_H

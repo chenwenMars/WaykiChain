@@ -22,92 +22,113 @@ using namespace std;
  */
 namespace db_util {
 
-#define DEFINE_NUMERIC_EMPTY(type) \
+#define DEFINE_NUMERIC_DB_FUNC(type) \
     inline bool IsEmpty(const type val) { return val == 0; } \
-    inline void SetEmpty(type &val) { val = 0; }
+    inline void SetEmpty(type &val) { val = 0; } \
+    inline string ToString(const type &val) { return std::to_string(val); }
 
     // bool
     inline bool IsEmpty(const bool val) { return val == false; }
     inline void SetEmpty(bool &val) { val = false; }
+    inline string ToString(const bool &val) { return val ? "true" : "false"; }
 
-    DEFINE_NUMERIC_EMPTY(int32_t)
-    DEFINE_NUMERIC_EMPTY(uint8_t)
-    DEFINE_NUMERIC_EMPTY(uint16_t)
-    DEFINE_NUMERIC_EMPTY(uint32_t)
-    DEFINE_NUMERIC_EMPTY(uint64_t)
+    DEFINE_NUMERIC_DB_FUNC(int32_t)
+    DEFINE_NUMERIC_DB_FUNC(uint8_t)
+    DEFINE_NUMERIC_DB_FUNC(uint16_t)
+    DEFINE_NUMERIC_DB_FUNC(uint32_t)
+    DEFINE_NUMERIC_DB_FUNC(uint64_t)
 
     // string
     template<typename C> bool IsEmpty(const basic_string<C> &val);
     template<typename C> void SetEmpty(basic_string<C> &val);
+    template<typename C> string ToString(const basic_string<C> &val);
 
     // vector
     template<typename T, typename A> bool IsEmpty(const vector<T, A>& val);
     template<typename T, typename A> void SetEmpty(vector<T, A>& val);
+    template<typename T, typename A> string ToString(const vector<T, A>& val);
     //shared_ptr
     template <typename T> bool  IsEmpty(const std::shared_ptr<T>& val) {
         return val == nullptr || (*val).IsEmpty();
     }
-    template <typename T> void SetEmpty(shared_ptr<T>& val) {
+    template <typename T> void SetEmpty(std::shared_ptr<T>& val) {
         if(val == nullptr){
-            val = make_shared<T>() ;
+            val = make_shared<T>();
         }
         (*val).SetEmpty();
     }
 
     //optional
-    template<typename T> bool IsEmpty(const std::optional<T> val) { return val == std::nullopt; }
-    template<typename T> void SetEmpty(std::optional<T>& val) { val = std::nullopt; }
+    template<typename T> bool IsEmpty(const std::optional<T> val);
+    template<typename T> void SetEmpty(std::optional<T>& val);
+    template<typename T> string ToString(const std::optional<T>& val);
 
     // set
     template<typename K, typename Pred, typename A> bool IsEmpty(const set<K, Pred, A>& val);
     template<typename K, typename Pred, typename A> void SetEmpty(set<K, Pred, A>& val);
+    template<typename K, typename Pred, typename A> string ToString(const set<K, Pred, A>& val);
 
     // map
-    template<typename K, typename T, typename Pred, typename A>
-    bool IsEmpty(const map<K, T, Pred, A>& val);
-    template<typename K, typename T, typename Pred, typename A>
-    void SetEmpty(map<K, T, Pred, A>& val);
+    template<typename K, typename T, typename Pred, typename A> bool IsEmpty(const map<K, T, Pred, A>& val);
+    template<typename K, typename T, typename Pred, typename A> void SetEmpty(map<K, T, Pred, A>& val);
+    template<typename K, typename T, typename Pred, typename A> string ToString(const map<K, T, Pred, A>& val);
 
     // 2 pair
     template<typename K, typename T> bool IsEmpty(const std::pair<K, T>& val);
     template<typename K, typename T> void SetEmpty(std::pair<K, T>& val);
+    template<typename K, typename T> string ToString(const std::pair<K, T>& val);
 
 
     // 2 tuple
     template<typename T0, typename T1> bool IsEmpty(const std::tuple<T0, T1>& val);
     template<typename T0, typename T1> void SetEmpty(std::tuple<T0, T1>& val);
+    template<typename T0, typename T1> string ToString(const std::tuple<T0, T1>& val);
 
     // 3 tuple
     template<typename T0, typename T1, typename T2> bool IsEmpty(const std::tuple<T0, T1, T2>& val);
     template<typename T0, typename T1, typename T2> void SetEmpty(std::tuple<T0, T1, T2>& val);
+    template<typename T0, typename T1, typename T2> string ToString(const std::tuple<T0, T1, T2>& val);
 
     // 4 tuple
     template<typename T0, typename T1, typename T2, typename T3> bool IsEmpty(const std::tuple<T0, T1, T2, T3>& val);
     template<typename T0, typename T1, typename T2, typename T3> void SetEmpty(std::tuple<T0, T1, T2, T3>& val);
+    template<typename T0, typename T1, typename T2, typename T3> string ToString(const std::tuple<T0, T1, T2, T3>& val);
 
     // common Object Type, must support T.IsEmpty() and T.SetEmpty()
     template<typename T> bool IsEmpty(const T& val);
     template<typename T> void SetEmpty(T& val);
+    template<typename T> string ToString(const T& val);
+
+    //optional
+    template<typename T> bool IsEmpty(const std::optional<T> val) { return val == std::nullopt; }
+    template<typename T> void SetEmpty(std::optional<T>& val) { val = std::nullopt; }
+    template<typename T> string ToString(const std::optional<T>& val) { return val ? ToString(val.value()) : ""; }
 
     // string
-    template<typename C>
-    bool IsEmpty(const basic_string<C> &val) {
+    template<typename C> bool IsEmpty(const basic_string<C> &val) {
         return val.empty();
     }
-
-    template<typename C>
-    void SetEmpty(basic_string<C> &val) {
+    template<typename C> void SetEmpty(basic_string<C> &val) {
         val.clear();
+    }
+    template<typename C> string ToString(const basic_string<C> &val) {
+        return val;
     }
 
     // vector
-    template<typename T, typename A>
-    bool IsEmpty(const vector<T, A>& val) {
+    template<typename T, typename A> bool IsEmpty(const vector<T, A>& val) {
         return val.empty();
     }
-    template<typename T, typename A>
-    void SetEmpty(vector<T, A>& val) {
+    template<typename T, typename A> void SetEmpty(vector<T, A>& val) {
         val.clear();
+    }
+    template<typename T, typename A> string ToString(const vector<T, A>& val) {
+        string ret;
+        for (const auto &item : val) {
+            if (!ret.empty()) ret += ",";
+            ret += "{" + ToString(item) + "}";
+        }
+        return "[" + ret + "]";
     }
 
     // set
@@ -117,54 +138,78 @@ namespace db_util {
     template<typename K, typename Pred, typename A> void SetEmpty(set<K, Pred, A>& val) {
         val.clear();
     }
-
-    template<typename K, typename T, typename Pred, typename A>
-    bool IsEmpty(const map<K, T, Pred, A>& val) {
-        return val.empty();
+    template<typename K, typename Pred, typename A> string ToString(const set<K, Pred, A>& val) {
+        string ret;
+        for (const auto &item : val) {
+            if (!ret.empty()) ret += ",";
+            ret += "{" + ToString(item) + "}";
+        }
+        return "[" + ret + "]";
     }
 
-    template<typename K, typename T, typename Pred, typename A>
-    void SetEmpty(map<K, T, Pred, A>& val) {
+    // map
+    template<typename K, typename T, typename Pred, typename A> bool IsEmpty(const map<K, T, Pred, A>& val) {
+        return val.empty();
+    }
+    template<typename K, typename T, typename Pred, typename A> void SetEmpty(map<K, T, Pred, A>& val) {
         val.clear();
+    }
+    template<typename K, typename T, typename Pred, typename A> string ToString(const map<K, T, Pred, A>& val) {
+        string ret;
+        for (const auto &item : val) {
+            if (!ret.empty()) ret += ",";
+            ret += "{" + ToString(item.first) + "=" + ToString(item.second) + "}";
+        }
+        return "[" + ret + "]";
     }
 
     // 2 pair
-    template<typename K, typename T>
-    bool IsEmpty(const std::pair<K, T>& val) {
+    template<typename K, typename T> bool IsEmpty(const std::pair<K, T>& val) {
         return IsEmpty(val.first) && IsEmpty(val.second);
     }
-    template<typename K, typename T>
-    void SetEmpty(std::pair<K, T>& val) {
+    template<typename K, typename T> void SetEmpty(std::pair<K, T>& val) {
         SetEmpty(val.first);
         SetEmpty(val.second);
+    }
+    template<typename K, typename T> string ToString(const std::pair<K, T>& val) {
+        string ret = "{first=" + ToString(val.first) + "}";
+        ret += "{second=" + ToString(val.second) + "}";
+        return "{" + ret + "}";
     }
 
 
     // 2 tuple
-    template<typename T0, typename T1>
-    bool IsEmpty(const std::tuple<T0, T1>& val) {
+    template<typename T0, typename T1> bool IsEmpty(const std::tuple<T0, T1>& val) {
         return IsEmpty(std::get<0>(val)) &&
                IsEmpty(std::get<1>(val));
     }
-    template<typename T0, typename T1>
-    void SetEmpty(std::tuple<T0, T1>& val) {
+    template<typename T0, typename T1> void SetEmpty(std::tuple<T0, T1>& val) {
         SetEmpty(std::get<0>(val));
         SetEmpty(std::get<1>(val));
 
     }
+    template<typename T0, typename T1> string ToString(const std::tuple<T0, T1>& val) {
+        string ret = "{0=" + ToString(std::get<0>(val)) + "}";
+        ret += "{1=" + ToString(std::get<1>(val)) + "}";
+        return "{" + ret + "}";
+    }
 
     // 3 tuple
-    template<typename T0, typename T1, typename T2>
-    bool IsEmpty(const std::tuple<T0, T1, T2>& val) {
+    template<typename T0, typename T1, typename T2> bool IsEmpty(const std::tuple<T0, T1, T2>& val) {
         return IsEmpty(std::get<0>(val)) &&
                IsEmpty(std::get<1>(val)) &&
                IsEmpty(std::get<2>(val));
     }
-    template<typename T0, typename T1, typename T2>
-    void SetEmpty(std::tuple<T0, T1, T2>& val) {
+    template<typename T0, typename T1, typename T2> void SetEmpty(std::tuple<T0, T1, T2>& val) {
         SetEmpty(std::get<0>(val));
         SetEmpty(std::get<1>(val));
         SetEmpty(std::get<2>(val));
+    }
+    template<typename T0, typename T1, typename T2> string ToString(const std::tuple<T0, T1, T2>& val) {
+        string ret = "{0=" + ToString(std::get<0>(val)) + "}";
+        ret += "{1=" + ToString(std::get<1>(val)) + "}";
+        ret += "{2=" + ToString(std::get<2>(val)) + "}";
+        return "{" + ret + "}";
     }
 
     // 4 tuple
@@ -182,16 +227,24 @@ namespace db_util {
         SetEmpty(std::get<2>(val));
         SetEmpty(std::get<3>(val));
     }
-
-    // common Object Type, must support T.IsEmpty() and T.SetEmpty()
-    template<typename T>
-    bool IsEmpty(const T& val) {
-        return val.IsEmpty();
+    template<typename T0, typename T1, typename T2, typename T3>
+    string ToString(const std::tuple<T0, T1, T2, T3>& val) {
+        string ret = "{0=" + ToString(std::get<0>(val)) + "}";
+        ret += "{1=" + ToString(std::get<1>(val)) + "}";
+        ret += "{2=" + ToString(std::get<2>(val)) + "}";
+        ret += "{3=" + ToString(std::get<3>(val)) + "}";
+        return "{" + ret + "}";
     }
 
-    template<typename T>
-    void SetEmpty(T& val) {
+    // common Object Type, must support T.IsEmpty() and T.SetEmpty()
+    template<typename T> bool IsEmpty(const T& val) {
+        return val.IsEmpty();
+    }
+    template<typename T> void SetEmpty(T& val) {
         val.SetEmpty();
+    }
+    template<typename T> string ToString(const T& val) {
+        return val.ToString();
     }
 
     template <typename ValueType>
@@ -206,6 +259,20 @@ namespace db_util {
         T value; SetEmpty(value);
         return value;
     }
+
+    template<typename V>
+    inline string to_kv_string(const string &k, const V &v) {
+        return k + "=" + db_util::ToString(v) + ",";
+    }
+    template<typename V>
+    inline string to_kv_string_end(const string &k, const V &v) {
+        return k + "=" + db_util::ToString(v);
+    }
+
+    #define TO_KV_STRING1(v) db_util::to_kv_string(#v, v)
+    #define TO_KV_STRING2(k, v) db_util::to_kv_string(k, v)
+    #define TO_KV_STRING_END1(v) db_util::to_kv_string(#v, v)
+    #define TO_KV_STRING_END2(k, v) db_util::to_kv_string(k, v)
 };
 
 typedef void(UndoDataFunc)(const CDbOpLogs &pDbOpLogs);
@@ -213,9 +280,9 @@ typedef std::map<dbk::PrefixType, std::function<UndoDataFunc>> UndoDataFuncMap;
 
 class CDBAccess {
 public:
-    CDBAccess(const boost::filesystem::path& dir, DBNameType dbNameTypeIn, bool fMemory, bool fWipe) :
-              dbNameType(dbNameTypeIn),
-              db( dir / ::GetDbName(dbNameTypeIn), DBCacheSize[dbNameTypeIn], fMemory, fWipe ) {}
+    CDBAccess(DBNameType dbNameTypeIn, const boost::filesystem::path &path, size_t cacheSize,
+              bool memory, bool wipe)
+        : dbNameType(dbNameTypeIn), db(path, cacheSize, memory, wipe) {}
 
     int64_t GetDbCount() const { return db.GetDbCount(); }
     template<typename KeyType, typename ValueType>
@@ -230,189 +297,18 @@ public:
         return db.Read(prefix, value);
     }
 
-    template <typename KeyType>
-    bool GetTopNElements(const uint32_t maxNum, const dbk::PrefixType prefixType, set<KeyType> &expiredKeys,
-                         set<KeyType> &keys) {
-        KeyType key;
-        uint32_t count             = 0;
-        shared_ptr<leveldb::Iterator> pCursor = NewIterator();
-
-        CDataStream ssKey(SER_DISK, CLIENT_VERSION);
-        const string &prefix = dbk::GetKeyPrefix(prefixType);
-        ssKey.write(prefix.c_str(), prefix.size());
-        pCursor->Seek(ssKey.str());
-
-        for (; (count < maxNum) && pCursor->Valid(); pCursor->Next()) {
-            boost::this_thread::interruption_point();
-
-            try {
-                leveldb::Slice slKey = pCursor->key();
-                if (!dbk::ParseDbKey(slKey, prefixType, key)) {
-                    break;
-                }
-
-                if (expiredKeys.count(key)) {
-                    continue;
-                } else if (keys.count(key)) {
-                    // skip it if the element existed in memory cache(upper level cache)
-                    continue;
-                } else {
-                    // Got an valid element.
-                    auto ret = keys.emplace(key);
-                    if (!ret.second)
-                        throw runtime_error(strprintf("%s :  %s, alloc new cache item failed", __FUNCTION__, __LINE__));
-
-                    ++count;
-                }
-            } catch (std::exception &e) {
-                return ERRORMSG("%s : Deserialize or I/O error - %s", __FUNCTION__, e.what());
-            }
-        }
-
-        return true;
-    }
-
-    template <typename KeyType, typename ValueType>
-    bool GetAllElements(const dbk::PrefixType prefixType, map<KeyType, ValueType> &elements) {
-        KeyType key;
-        ValueType value;
-        shared_ptr<leveldb::Iterator> pCursor = NewIterator();
-
-        CDataStream ssKey(SER_DISK, CLIENT_VERSION);
-        const string &prefix = dbk::GetKeyPrefix(prefixType);
-        ssKey.write(prefix.c_str(), prefix.size());
-        pCursor->Seek(ssKey.str());
-
-        for (; pCursor->Valid(); pCursor->Next()) {
-            boost::this_thread::interruption_point();
-
-            try {
-                const auto &slKey = pCursor->key();
-                if (!dbk::ParseDbKey(slKey, prefixType, key)) {
-                    break;
-                }
-
-                // Got an valid element.
-                const auto &slValue = pCursor->value();
-                CDataStream ds(slValue.data(), slValue.data() + slValue.size(), SER_DISK, CLIENT_VERSION);
-                ds >> value;
-                auto ret = elements.emplace(key, value);
-                if (!ret.second)
-                    throw runtime_error(strprintf("%s :  %s, alloc new cache item failed", __FUNCTION__, __LINE__));
-            } catch (std::exception &e) {
-                return ERRORMSG("%s : Deserialize or I/O error - %s", __FUNCTION__, e.what());
-            }
-        }
-
-        return true;
-    }
-
-    // GetAllElements
-    // support input end key
-    template <typename KeyType, typename ValueType>
-    bool GetAllElements(const dbk::PrefixType prefixType, const KeyType &endKey,
-                        map<KeyType, ValueType> &elements, set<KeyType> &expiredKeys) {
-
-        KeyType key;
-        ValueType value;
-        shared_ptr<leveldb::Iterator> pCursor = NewIterator();
-        const string &prefixStr = dbk::GetKeyPrefix(prefixType);
-
-        for (pCursor->Seek(prefixStr); pCursor->Valid(); pCursor->Next()) {
-            boost::this_thread::interruption_point();
-
-            try {
-                leveldb::Slice slKey = pCursor->key();
-                if (!dbk::ParseDbKey(slKey, prefixType, key)) { // the rest key is other prefix type
-                    break;
-                }
-
-                if (endKey < key)
-                    break;
-
-                if (expiredKeys.count(key) || elements.count(key)) // key exists in cache
-                    continue;
-
-                // Got an valid element.
-                leveldb::Slice slValue = pCursor->value();
-                CDataStream ds(slValue.data(), slValue.data() + slValue.size(), SER_DISK, CLIENT_VERSION);
-                ds >> value;
-                auto ret = elements.emplace(key, value);
-                if (!ret.second)
-                    throw runtime_error(strprintf("%s :  %s, alloc new cache item failed", __FUNCTION__, __LINE__));
-
-            } catch (std::exception &e) {
-                return ERRORMSG("%s : Deserialize or I/O error - %s", __FUNCTION__, e.what());
-            }
-        }
-
-        return true;
-    }
-
-    template <typename KeyType, typename ValueType>
-    bool GetAllElements(const dbk::PrefixType prefixType, set<KeyType> &expiredKeys,
-                        map<KeyType, ValueType> &elements) {
-        KeyType key;
-        ValueType value;
-        shared_ptr<leveldb::Iterator> pCursor = NewIterator();
-        CDataStream ssKey(SER_DISK, CLIENT_VERSION);
-        const string &prefix = dbk::GetKeyPrefix(prefixType);
-        ssKey.write(prefix.c_str(), prefix.size());
-        pCursor->Seek(ssKey.str());
-
-        for (; pCursor->Valid(); pCursor->Next()) {
-            boost::this_thread::interruption_point();
-
-            try {
-                leveldb::Slice slKey = pCursor->key();
-                if (!dbk::ParseDbKey(slKey, prefixType, key)) {
-                    break;
-                }
-
-                if (expiredKeys.count(key)) {
-                    continue;
-                } else if (elements.count(key)) {
-                    // skip it if the element existed in memory cache(upper level cache)
-                    continue;
-                } else {
-                    // Got an valid element.
-                    leveldb::Slice slValue = pCursor->value();
-                    CDataStream ds(slValue.data(), slValue.data() + slValue.size(), SER_DISK, CLIENT_VERSION);
-                    ds >> value;
-                    auto ret = elements.emplace(key, value);
-                    if (!ret.second)
-                        throw runtime_error(strprintf("%s :  %s, alloc new cache item failed", __FUNCTION__, __LINE__));
-                }
-            } catch (std::exception &e) {
-                return ERRORMSG("%s : Deserialize or I/O error - %s", __FUNCTION__, e.what());
-            }
-        }
-
-        return true;
-    }
-
     template<typename KeyType, typename ValueType>
-    bool HaveData(const dbk::PrefixType prefixType, const KeyType &key) const {
+    bool HasData(const dbk::PrefixType prefixType, const KeyType &key) const {
         string keyStr = dbk::GenDbKey(prefixType, key);
         return db.Exists(keyStr);
     }
 
-    template<typename KeyType, typename ValueType>
-    void BatchWrite(const dbk::PrefixType prefixType, const map<KeyType, ValueType> &mapData) {
-        CLevelDBBatch batch;
-        for (auto item : mapData) {
-            string key = dbk::GenDbKey(prefixType, item.first);
-            if (db_util::IsEmpty(item.second)) {
-                batch.Erase(key);
-            } else {
-                batch.Write(key, item.second);
-            }
-        }
+    inline void WriteBatch(CLevelDBBatch &batch) {
         db.WriteBatch(batch, true);
     }
 
     template<typename ValueType>
-    void BatchWrite(const dbk::PrefixType prefixType, ValueType &value) {
+    void WriteBatch(const dbk::PrefixType prefixType, ValueType &value) {
         CLevelDBBatch batch;
         const string prefix = dbk::GetKeyPrefix(prefixType);
 
@@ -441,8 +337,9 @@ public:
 public:
     typedef __KeyType   KeyType;
     typedef __ValueType ValueType;
-    typedef typename std::map<KeyType, ValueType> Map;
-    typedef typename std::map<KeyType, ValueType>::iterator Iterator;
+    typedef std::shared_ptr<__ValueType> ValueSPtr;
+    typedef typename std::map<KeyType, ValueSPtr> Map;
+    typedef typename std::map<KeyType, ValueSPtr>::iterator Iterator;
 
 public:
     /**
@@ -461,6 +358,25 @@ public:
         assert(pDbAccess->GetDbNameType() == GetDbNameEnumByPrefix(PREFIX_TYPE));
     };
 
+    CCompositeKVCache(const CCompositeKVCache &other) {
+        operator=(other);
+    }
+
+    CCompositeKVCache& operator=(const CCompositeKVCache& other) {
+        pBase = other.pBase;
+        pDbAccess = other.pDbAccess;
+        // deep copy for map
+        mapData.clear();
+        for (auto otherItem : other.mapData) {
+            mapData[otherItem.first] = make_shared<ValueType>(*otherItem.second);
+        }
+        pDbOpLogMap = other.pDbOpLogMap;
+        is_calc_size = other.is_calc_size;
+        size = other.size;
+
+        return *this;
+    }
+
     void SetBase(CCompositeKVCache *pBaseIn) {
         assert(pDbAccess == nullptr);
         assert(mapData.empty());
@@ -477,55 +393,13 @@ public:
         return size;
     }
 
-    bool GetTopNElements(const uint32_t maxNum, set<KeyType> &keys) {
-        // 1. Get all candidate elements.
-        set<KeyType> expiredKeys;
-        set<KeyType> candidateKeys;
-        if (!GetTopNElements(maxNum, expiredKeys, candidateKeys)) {
-            // TODO: log
-            return false;
-        }
-
-        // 2. Get the top N elements.
-        uint32_t count  = 0;
-        for (const auto item : candidateKeys) {
-            if (count ++ == maxNum) {
-                break;
-            }
-            keys.emplace(item);
-        }
-
-        return keys.size() == maxNum;
-    }
-
-    // map<string, ValueType>
-    bool GetAllElements(const KeyType &endKey, Map &elements) {
-        set<KeyType> expiredKeys;
-        if (!GetAllElements(endKey, elements, expiredKeys)) {
-            // TODO: log
-            return false;
-        }
-
-        return true;
-    }
-
-    bool GetAllElements(map<KeyType, ValueType> &elements) {
-        set<KeyType> expiredKeys;
-        if (!GetAllElements(expiredKeys, elements)) {
-            // TODO: log
-            return false;
-        }
-
-        return true;
-    }
-
     bool GetData(const KeyType &key, ValueType &value) const {
         if (db_util::IsEmpty(key)) {
             return false;
         }
         auto it = GetDataIt(key);
-        if (it != mapData.end() && !db_util::IsEmpty(it->second)) {
-            value = it->second;
+        if (it != mapData.end() && !db_util::IsEmpty(*it->second)) {
+            value = *it->second;
             return true;
         }
         return false;
@@ -541,19 +415,19 @@ public:
             AddOpLog(key, *pEmptyValue, &value);
             AddDataToMap(key, value);
         } else {
-            AddOpLog(key, it->second, &value);
-            UpdateDataSize(it->second, value);
-            it->second = value;
+            AddOpLog(key, *it->second, &value);
+            UpdateDataSize(*it->second, value);
+            *it->second = value;
         }
         return true;
     }
 
-    bool HaveData(const KeyType &key) const {
+    bool HasData(const KeyType &key) const {
         if (db_util::IsEmpty(key)) {
             return false;
         }
         auto it = GetDataIt(key);
-        return it != mapData.end() && !db_util::IsEmpty(it->second);
+        return it != mapData.end() && !db_util::IsEmpty(*it->second);
     }
 
     bool EraseData(const KeyType &key) {
@@ -561,11 +435,11 @@ public:
             return false;
         }
         Iterator it = GetDataIt(key);
-        if (it != mapData.end() && !db_util::IsEmpty(it->second)) {
-            DecDataSize(it->second);
-            AddOpLog(key, it->second, nullptr);
-            db_util::SetEmpty(it->second);
-            IncDataSize(it->second);
+        if (it != mapData.end() && !db_util::IsEmpty(*it->second)) {
+            DecDataSize(*it->second);
+            AddOpLog(key, *it->second, nullptr);
+            db_util::SetEmpty(*it->second);
+            IncDataSize(*it->second);
         }
         return true;
     }
@@ -579,12 +453,21 @@ public:
         assert(pBase != nullptr || pDbAccess != nullptr);
         if (pBase != nullptr) {
             assert(pDbAccess == nullptr);
-            for (auto it : mapData) {
-                pBase->mapData[it.first] = it.second;
+            for (auto item : mapData) {
+                pBase->SetDataToSelf(item.first, *item.second);
             }
         } else if (pDbAccess != nullptr) {
             assert(pBase == nullptr);
-            pDbAccess->BatchWrite<KeyType, ValueType>(PREFIX_TYPE, mapData);
+            CLevelDBBatch batch;
+            for (auto item : mapData) {
+                string key = dbk::GenDbKey(PREFIX_TYPE, item.first);
+                if (db_util::IsEmpty(*item.second)) {
+                    batch.Erase(key);
+                } else {
+                    batch.Write(key, *item.second);
+                }
+            }
+            pDbAccess->WriteBatch(batch);
         }
 
         Clear();
@@ -594,13 +477,7 @@ public:
         KeyType key;
         ValueType value;
         dbOpLog.Get(key, value);
-        auto it = mapData.find(key);
-        if (it != mapData.end()) {
-            UpdateDataSize(it->second, value);
-            it->second = value;
-        } else {
-            AddDataToMap(key, value);
-        }
+        SetDataToSelf(key, value);
     }
 
     void UndoDataList(const CDbOpLogs &dbOpLogs) {
@@ -625,7 +502,7 @@ public:
 
     CCompositeKVCache<PREFIX_TYPE, KeyType, ValueType>* GetBasePtr() { return pBase; }
 
-    map<KeyType, ValueType>& GetMapData() { return mapData; };
+    map<KeyType, ValueSPtr>& GetMapData() { return mapData; };
 private:
     Iterator GetDataIt(const KeyType &key) const {
         Iterator it = mapData.find(key);
@@ -636,24 +513,40 @@ private:
             auto baseIt = pBase->GetDataIt(key);
             if (baseIt != pBase->mapData.end()) {
                 // the found key-value add to current mapData
-                return AddDataToMap(key, baseIt->second);
+                return AddDataToMap(key, *baseIt->second);
             }
         } else if (pDbAccess != NULL) {
             // TODO: need to save the empty value to mapData for search performance?
             auto pDbValue = db_util::MakeEmptyValue<ValueType>();
             if (pDbAccess->GetData(PREFIX_TYPE, key, *pDbValue)) {
-                return AddDataToMap(key, *pDbValue);
+                return AddDataToMap(key, pDbValue);
             }
         }
 
         return mapData.end();
     }
 
+    // set data to self only
+    void SetDataToSelf(const KeyType &key, const ValueType &value) {
+        auto it = mapData.find(key);
+        if (it != mapData.end()) {
+            UpdateDataSize(*it->second, value);
+            *it->second = value;
+        } else {
+            AddDataToMap(key, value);
+        }
+    }
+
     inline Iterator AddDataToMap(const KeyType &keyIn, const ValueType &valueIn) const {
-        auto newRet = mapData.emplace(keyIn, valueIn);
+        auto spNewValue = make_shared<ValueType>(valueIn);
+        return AddDataToMap(keyIn, spNewValue);
+    }
+
+    inline Iterator AddDataToMap(const KeyType &keyIn, ValueSPtr &spNewValue) const {
+        auto newRet = mapData.emplace(keyIn, spNewValue);
         if (!newRet.second)
             throw runtime_error(strprintf("%s :  %s, alloc new cache item failed", __FUNCTION__, __LINE__));
-        IncDataSize(keyIn, valueIn);
+        IncDataSize(keyIn, *spNewValue);
         return newRet.first;
     }
 
@@ -689,82 +582,6 @@ private:
         return ::GetSerializeSize(d, SER_DISK, CLIENT_VERSION);
     }
 
-    bool GetTopNElements(const uint32_t maxNum, set<KeyType> &expiredKeys, set<KeyType> &keys) {
-        if (!mapData.empty()) {
-            uint32_t count = 0;
-            auto iter      = mapData.begin();
-
-            for (; (count < maxNum) && iter != mapData.end(); ++iter) {
-                if (db_util::IsEmpty(iter->second)) {
-                    expiredKeys.insert(iter->first);
-                } else if (expiredKeys.count(iter->first) || keys.count(iter->first)) {
-                    // TODO: log
-                    continue;
-                } else {
-                    // Got a valid element.
-                    keys.insert(iter->first);
-
-                    ++count;
-                }
-            }
-        }
-
-        if (pBase != nullptr) {
-            return pBase->GetTopNElements(maxNum, expiredKeys, keys);
-        } else if (pDbAccess != nullptr) {
-            return pDbAccess->GetTopNElements(maxNum, PREFIX_TYPE, expiredKeys, keys);
-        }
-
-        return true;
-    }
-
-    // map<string, ValueType>
-    bool GetAllElements(const KeyType &endKey, Map &mapDataOut, set<KeyType> &expiredKeys) {
-        if (!mapData.empty()) {
-            for (auto iter = mapData.begin(); iter != mapData.end() && iter->first < endKey; iter++) {
-                if (!expiredKeys.count(iter->first) && !mapDataOut.count(iter->first)) { // check not got
-                    if (db_util::IsEmpty(iter->second)) { // empty, will be deleted
-                        expiredKeys.insert(iter->first);
-                    } else { // Got a valid element.
-                        mapDataOut.emplace(iter->first, iter->second);
-                    }
-                }
-            }
-        }
-
-        if (pBase != nullptr) {
-            return pBase->GetAllElements(endKey, mapDataOut, expiredKeys);
-        } else if (pDbAccess != nullptr) {
-            return pDbAccess->GetAllElements(PREFIX_TYPE, endKey, mapDataOut, expiredKeys);
-        }
-
-        return true;
-    }
-
-    bool GetAllElements(set<KeyType> &expiredKeys, map<KeyType, ValueType> &elements) {
-        if (!mapData.empty()) {
-            for (auto iter : mapData) {
-                if (db_util::IsEmpty(iter.second)) {
-                    expiredKeys.insert(iter.first);
-                } else if (expiredKeys.count(iter.first) || elements.count(iter.first)) {
-                    // TODO: log
-                    continue;
-                } else {
-                    // Got a valid element.
-                    elements.insert(iter);
-                }
-            }
-        }
-
-        if (pBase != nullptr) {
-            return pBase->GetAllElements(expiredKeys, elements);
-        } else if (pDbAccess != nullptr) {
-            return pDbAccess->GetAllElements(PREFIX_TYPE, expiredKeys, elements);
-        }
-
-        return true;
-    }
-
     inline void AddOpLog(const KeyType &key, const ValueType& oldValue, const ValueType *pNewValue) {
         if (pDbOpLogMap != nullptr) {
             CDbOpLog dbOpLog;
@@ -783,7 +600,7 @@ private:
 private:
     mutable CCompositeKVCache<PREFIX_TYPE, KeyType, ValueType> *pBase = nullptr;
     CDBAccess *pDbAccess = nullptr;
-    mutable map<KeyType, ValueType> mapData;
+    mutable map<KeyType, ValueSPtr> mapData;
     CDBOpLogMap *pDbOpLogMap = nullptr;
     bool is_calc_size = false;
     mutable uint32_t size = 0;
@@ -856,15 +673,16 @@ public:
     }
 
     bool SetData(const ValueType &value) {
+        GetDataPtr();
         if (!ptrData) {
             ptrData = db_util::MakeEmptyValue<ValueType>();
         }
-        AddOpLog(*ptrData);
+        AddOpLog(*ptrData, &value);
         *ptrData = value;
         return true;
     }
 
-    bool HaveData() const {
+    bool HasData() const {
         auto ptr = GetDataPtr();
         return ptr && !db_util::IsEmpty(*ptr);
     }
@@ -872,7 +690,7 @@ public:
     bool EraseData() {
         auto ptr = GetDataPtr();
         if (ptr && !db_util::IsEmpty(*ptr)) {
-            AddOpLog(*ptr);
+            AddOpLog(*ptr, nullptr);
             db_util::SetEmpty(*ptr);
         }
         return true;
@@ -890,7 +708,7 @@ public:
                 pBase->ptrData = ptrData;
             } else if (pDbAccess != nullptr) {
                 assert(pBase == nullptr);
-                pDbAccess->BatchWrite(PREFIX_TYPE, *ptrData);
+                pDbAccess->WriteBatch(PREFIX_TYPE, *ptrData);
             }
             ptrData = nullptr;
         }
@@ -914,7 +732,7 @@ public:
     }
 
     dbk::PrefixType GetPrefixType() const { return PREFIX_TYPE; }
-private:
+
     std::shared_ptr<ValueType> GetDataPtr() const {
 
         if (ptrData) {
@@ -937,10 +755,18 @@ private:
         return nullptr;
     }
 
-    inline void AddOpLog(const ValueType &oldValue) {
+private:
+    inline void AddOpLog(const ValueType &oldValue, const ValueType *pNewValue) {
         if (pDbOpLogMap != nullptr) {
             CDbOpLog dbOpLog;
-            dbOpLog.Set(oldValue);
+            #ifdef DB_OP_LOG_NEW_VALUE
+                if (pNewValue != nullptr)
+                    dbOpLog.Set(make_pair(oldValue, *pNewValue));
+                else
+                    dbOpLog.Set(make_pair(oldValue, ValueType()));
+            #else
+                dbOpLog.Set(oldValue);
+            #endif
             pDbOpLogMap->AddOpLog(PREFIX_TYPE, dbOpLog);
         }
 

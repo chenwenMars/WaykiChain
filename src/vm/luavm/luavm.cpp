@@ -9,6 +9,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
+#include <cstdarg>
 
 #include <openssl/des.h>
 #include <vector>
@@ -135,11 +136,7 @@ CLuaVM::CLuaVM(const std::string &codeIn, const std::string &argumentsIn):
 
 CLuaVM::~CLuaVM() {}
 
-#ifdef WIN_DLL
-extern "C" __declspec(dllexport) int luaopen_mylib(lua_State *L);
-#else
-LUAMOD_API int luaopen_mylib(lua_State *L);
-#endif
+extern lua_CFunction GetLuaMylib(HeightType height);
 
 bool InitLuaLibsEx(lua_State *L);
 
@@ -168,7 +165,7 @@ void vm_openlibs(lua_State *L) {
     }
 }
 
-tuple<bool, string> CLuaVM::CheckScriptSyntax(const char *filePath) {
+tuple<bool, string> CLuaVM::CheckScriptSyntax(const char *filePath, HeightType height) {
 
     std::unique_ptr<lua_State, decltype(&lua_close)> lua_state_ptr(luaL_newstate(), &lua_close);
     if (!lua_state_ptr) {
@@ -183,7 +180,7 @@ tuple<bool, string> CLuaVM::CheckScriptSyntax(const char *filePath) {
         return std::make_tuple(-1, string("CLuaVM::CheckScriptSyntax InitLuaLibsEx error\n"));
     }
 
-    luaL_requiref(lua_state, "mylib", luaopen_mylib, 1);
+    luaL_requiref(lua_state, "mylib", GetLuaMylib(height), 1);
 
     int nRet = luaL_loadfile(lua_state, filePath);
     if (nRet) {
@@ -239,6 +236,20 @@ static std::string GetLuaError(lua_State *L, int status, std::string prefix) {
     return ret;
 }
 
+#ifdef TRACE_LUA_VM_BURN
+
+void TraceVmBurning(lua_State *L, const char* caption, const char* format, ...) {
+    char* pStr = new char[2048];
+    va_list ap;
+    va_start(ap, format);
+    vsprintf(pStr, format, ap);
+    va_end(ap);
+    LogPrint(BCLog::LUAVM, "%s, %s", caption, pStr);
+    delete[] pStr;
+}
+
+#endif//TRACE_LUA_VM_BURN
+
 tuple<uint64_t, string> CLuaVM::Run(uint64_t fuelLimit, CLuaVMRunEnv *pVmRunEnv) {
     if (NULL == pVmRunEnv) {
         return std::make_tuple(-1, string("pVmRunEnv == NULL"));
@@ -247,16 +258,19 @@ tuple<uint64_t, string> CLuaVM::Run(uint64_t fuelLimit, CLuaVMRunEnv *pVmRunEnv)
     // 1.创建Lua运行环境
     std::unique_ptr<lua_State, decltype(&lua_close)> lua_state_ptr(luaL_newstate(), &lua_close);
     if (!lua_state_ptr) {
-        LogPrint(BCLog::LUAVM, "CLuaVM::Run luaL_newstate() failed\n");
+        LogPrint(BCLog::LUAVM, "luaL_newstate() failed\n");
         return std::make_tuple(-1, string("CLuaVM::Run luaL_newstate() failed\n"));
     }
     lua_State *lua_state = lua_state_ptr.get();
 
-    //TODO: should get burner version from the block height
     if (!lua_StartBurner(lua_state, pVmRunEnv, fuelLimit, pVmRunEnv->GetBurnVersion())) {
-        LogPrint(BCLog::LUAVM, "CLuaVM::Run lua_StartBurner() failed\n");
+        LogPrint(BCLog::LUAVM, "lua_StartBurner() failed\n");
         return std::make_tuple(-1, string("CLuaVM::Run lua_StartBurner() failed\n"));
     }
+
+#ifdef TRACE_LUA_VM_BURN
+    lua_SetBurnerTracer(lua_state, TraceVmBurning);
+#endif//TRACE_LUA_VM_BURN
 
     //打开需要的库
     vm_openlibs(lua_state);
@@ -267,7 +281,7 @@ tuple<uint64_t, string> CLuaVM::Run(uint64_t fuelLimit, CLuaVMRunEnv *pVmRunEnv)
     }
 
     // 3.注册自定义模块
-    luaL_requiref(lua_state, "mylib", luaopen_mylib, 1);
+    luaL_requiref(lua_state, "mylib", GetLuaMylib(pVmRunEnv->GetContext().height), 1);
 
     // 4.往lua脚本传递合约内容
     lua_newtable(lua_state);  //新建一个表,压入栈顶
@@ -283,13 +297,12 @@ tuple<uint64_t, string> CLuaVM::Run(uint64_t fuelLimit, CLuaVMRunEnv *pVmRunEnv)
     // 传递pVmScriptRun指针，以便后面代码引用，去掉了使用全局变量保存该指针
     lua_pushlightuserdata(lua_state, pVmRunEnv);
     lua_setglobal(lua_state, "VmScriptRun");
-    LogPrint(BCLog::LUAVM, "pVmRunEnv=%p\n", pVmRunEnv);
 
     // 5. Load the contract script
     std::string strError;
     int luaStatus = luaL_loadbuffer(lua_state, code.c_str(), code.size(), "line");
     if (luaStatus == LUA_OK) {
-        luaStatus = lua_pcallk(lua_state, 0, 0, 0, 0, NULL, BURN_VER_STEP_V1);
+        luaStatus = lua_pcallk(lua_state, 0, 0, 0, 0, NULL, pVmRunEnv->GetBurnVersion());
         if (luaStatus != LUA_OK) {
             strError = GetLuaError(lua_state, luaStatus, "lua_pcallk failed");
         }
@@ -322,5 +335,5 @@ tuple<uint64_t, string> CLuaVM::Run(uint64_t fuelLimit, CLuaVMRunEnv *pVmRunEnv)
         return std::make_tuple(-1, string("CLuaVM::Run burned-out\n"));
     }
 
-    return std::make_tuple(burnedFuel, string("script runs ok"));
+    return std::make_tuple(burnedFuel, string("Lua scripts runs ok"));
 }

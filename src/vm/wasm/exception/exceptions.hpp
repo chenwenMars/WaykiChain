@@ -9,7 +9,7 @@ namespace wasm_chain {
 
 #define CHAIN_ASSERT( expr, exception_type, ... )       \
 	if ( !( expr ) ) {                            \
-		throw exception_type( CHAIN_LOG_MESSAGE( log_level::warn, __VA_ARGS__ ) );} 
+		throw exception_type( CHAIN_LOG_MESSAGE( log_level::warn, __VA_ARGS__ ) );}
 
 #define CHAIN_THROW( exception_type, ... )       \
 		throw exception_type( CHAIN_LOG_MESSAGE( log_level::warn, __VA_ARGS__ ) );
@@ -42,7 +42,7 @@ namespace wasm_chain {
                 CHAIN_LOG_MESSAGE( log_level::warn,  ": " + tfm::format(__VA_ARGS__) + " " + e.what()), \
                 wasm_chain::std_exception_code,\
                 "std_exception", \
-                e.what() ) ; throw wasme;\
+                e.what() ); throw wasme;\
    } catch( ... ) {  \
       throw wasm_chain::unhandled_exception( \
                 CHAIN_LOG_MESSAGE( log_level::warn, tfm::format(__VA_ARGS__)), \
@@ -51,7 +51,7 @@ namespace wasm_chain {
 
 
   #define CHAIN_EXCEPTION_APPEND_LOG( E, LOG_LEVEL, ... ) \
-      E.append_log( CHAIN_LOG_MESSAGE( LOG_LEVEL, __VA_ARGS__) ) ;
+      E.append_log( CHAIN_LOG_MESSAGE( LOG_LEVEL, __VA_ARGS__) );
 
   #define CHAIN_RETHROW_EXECPTION(E, LOG_LEVEL, ...) \
       CHAIN_EXCEPTION_APPEND_LOG(E, LOG_LEVEL, __VA_ARGS__ ) \
@@ -88,8 +88,8 @@ namespace wasm_chain {
     CHAIN_DECLARE_DERIVED_EXCEPTION( chain_type_exception, chain_exception,
                                   3010000, "chain type exception" )
 
-      CHAIN_DECLARE_DERIVED_EXCEPTION( name_type_exception,               chain_type_exception,
-                                    3010001, "Invalid name" )
+      CHAIN_DECLARE_DERIVED_EXCEPTION( regid_type_exception,               chain_type_exception,
+                                    3010001, "Invalid regid" )
       CHAIN_DECLARE_DERIVED_EXCEPTION( public_key_type_exception,         chain_type_exception,
                                     3010002, "Invalid public key" )
       CHAIN_DECLARE_DERIVED_EXCEPTION( private_key_type_exception,        chain_type_exception,
@@ -116,11 +116,12 @@ namespace wasm_chain {
                                     3010013, "Invalid fixed key" )
       CHAIN_DECLARE_DERIVED_EXCEPTION( symbol_type_exception,             chain_type_exception,
                                     3010014, "Invalid symbol" )
+      CHAIN_DECLARE_DERIVED_EXCEPTION( precision_size_exception,          chain_type_exception,
+                                    3010015, "Invalid precision size" )
       CHAIN_DECLARE_DERIVED_EXCEPTION( unactivated_key_type,              chain_type_exception,
-                                    3010015, "Key type is not a currently activated type" )
+                                    3010016, "Key type is not a currently activated type" )
       CHAIN_DECLARE_DERIVED_EXCEPTION( unactivated_signature_type,        chain_type_exception,
-                                    3010016, "Signature type is not a currently activated type" )
-
+                                    3010017, "Signature type is not a currently activated type" )
 
    CHAIN_DECLARE_DERIVED_EXCEPTION( fork_database_exception, chain_exception,
                                  3020000, "Fork database exception" )
@@ -207,7 +208,7 @@ namespace wasm_chain {
                                     3040021, "Transaction trace access exception" )
 
    CHAIN_DECLARE_DERIVED_EXCEPTION( inline_transaction_validate_exception, chain_exception,
-                                 3050000, "Action validate exception" )
+                                    3050000, "Action validate exception" )
 
       CHAIN_DECLARE_DERIVED_EXCEPTION( account_name_exists_exception, inline_transaction_validate_exception,
                                     3050001, "Account name already exists" )
@@ -232,7 +233,7 @@ namespace wasm_chain {
       CHAIN_DECLARE_DERIVED_EXCEPTION( restricted_error_code_exception, inline_transaction_validate_exception,
                                     3050011, "wasm_assert_code assertion failure uses restricted error code value" )
       CHAIN_DECLARE_DERIVED_EXCEPTION( wasm_assert_exception, inline_transaction_validate_exception,
-                                    3050004, "wasm_assert assertion failure" )
+                                    3050012, "wasm_assert assertion failure" )
 
    CHAIN_DECLARE_DERIVED_EXCEPTION( database_exception, chain_exception,
                                  3060000, "Database exception" )
@@ -557,37 +558,56 @@ namespace wasm_chain {
    CHAIN_DECLARE_DERIVED_EXCEPTION( native_contract_exception,    chain_exception,
                                  3260000, "Native contract exception" )
       CHAIN_DECLARE_DERIVED_EXCEPTION( native_contract_assert_exception, native_contract_exception,
-                                    3260001, "Native contract assert exception" )  
+                                    3260001, "Native contract assert exception" )
       CHAIN_DECLARE_DERIVED_EXCEPTION( native_contract_access_exception, native_contract_exception,
                                     3260002, "Native contract access exception" )
 
    CHAIN_DECLARE_DERIVED_EXCEPTION( account_exception,    chain_exception,
                                  3270000, "Account exception" )
       CHAIN_DECLARE_DERIVED_EXCEPTION( account_access_exception, account_exception,
-                                    3270001, "Account access exception" )  
+                                    3270001, "Account access exception" )
+      CHAIN_DECLARE_DERIVED_EXCEPTION( account_fund_exception, account_exception,
+                                    3270002, "Account fund insufficient exception" )
 
    CHAIN_DECLARE_DERIVED_EXCEPTION( size_exceeds_exception,    chain_exception,
                                  3280000, "Size exceeds exception" )
       CHAIN_DECLARE_DERIVED_EXCEPTION( inline_transaction_data_size_exceeds_exception, size_exceeds_exception,
-                                    3280001, "Inline transaction data size exceeds exception" ) 
+                                    3280001, "Inline transaction data size exceeds exception" )
       CHAIN_DECLARE_DERIVED_EXCEPTION( contract_code_size_exceeds_exception, size_exceeds_exception,
                                     3280002, "contract code size exceeds exception" )
       CHAIN_DECLARE_DERIVED_EXCEPTION( rpc_params_size_exceeds_exception, size_exceeds_exception,
-                                    3280003, "rpc params size exceeds exception" )  
+                                    3280003, "rpc params size exceeds exception" )
       CHAIN_DECLARE_DERIVED_EXCEPTION( inline_transaction_size_exceeds_exception, size_exceeds_exception,
-                                    3280004, "Inline transaction size exceeds exception" ) 
+                                    3280004, "Inline transaction size exceeds exception" )
       CHAIN_DECLARE_DERIVED_EXCEPTION( recipients_size_exceeds_exception, size_exceeds_exception,
-                                    3280005, "Recipients size exceeds exception" ) 
+                                    3280005, "Recipients size exceeds exception" )
       CHAIN_DECLARE_DERIVED_EXCEPTION( wasm_api_data_size_exceeds_exception, size_exceeds_exception,
-                                    3280006, "Wasm api data size exceeds exception" ) 
+                                    3280006, "Wasm api data size exceeds exception" )
       CHAIN_DECLARE_DERIVED_EXCEPTION( array_size_exceeds_exception, size_exceeds_exception,
-                                    3280007, "array size exceeds exceeds exception" ) 
+                                    3280007, "array size exceeds exceeds exception" )
 
    CHAIN_DECLARE_DERIVED_EXCEPTION( file_exception,    chain_exception,
                                  3290000, "File exception" )
       CHAIN_DECLARE_DERIVED_EXCEPTION( file_read_exception, file_exception,
-                                    3290001, "File read exception" ) 
+                                    3290001, "File read exception" )
       CHAIN_DECLARE_DERIVED_EXCEPTION( file_write_exception, file_exception,
                                     3290002, "File write exception" )
+
+////////////////////////////////////////////////////////////////////////////////
+// native bank
+
+      CHAIN_DECLARE_DERIVED_EXCEPTION( asset_name_exception,      chain_type_exception,
+                                    3300001, "Invalid asset name" )
+      CHAIN_DECLARE_DERIVED_EXCEPTION( asset_total_supply_exception,      chain_type_exception,
+                                    3300001, "Invalid asset total supply" )
+
+////////////////////////////////////////////////////////////////////////////////
+// rpc
+   CHAIN_DECLARE_DERIVED_EXCEPTION( wasm_rpc_exception,      wasm_exception,
+                                 3300001, "rpc exception" )
+      CHAIN_DECLARE_DERIVED_EXCEPTION( rpc_no_ret_exception,      wasm_rpc_exception,
+                                    3300001, "rpc no result exception" )
+
+
 
 } //chain

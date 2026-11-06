@@ -24,15 +24,19 @@
 
 using namespace std;
 
-
-
-
-
 //
 // CDB
 //
 
 CDBEnv bitdb;
+
+
+void CDBEnv::CloseErrFile() {
+    if (err_file != nullptr) {
+        fclose(err_file);
+        err_file = nullptr;
+    }
+}
 
 void CDBEnv::EnvShutdown()
 {
@@ -51,6 +55,7 @@ void CDBEnv::EnvShutdown()
             LogPrint(BCLog::CDB,"CDBEnv::remove: Error %d shutting down database environment: %s\n", ret, DbEnv::strerror(ret));
 
     }
+    CloseErrFile();
 }
 
 void CDBEnv::Reset()
@@ -59,6 +64,7 @@ void CDBEnv::Reset()
     dbenv = new DbEnv(DB_CXX_NO_EXCEPTIONS);
     fDbEnvInit = false;
     fMockDb = false;
+    CloseErrFile();
 }
 
 CDBEnv::CDBEnv() : dbenv(NULL)
@@ -88,7 +94,7 @@ bool CDBEnv::Open(const boost::filesystem::path& pathIn)
     path = pathIn;
     boost::filesystem::path pathLogDir = path / "database";
     TryCreateDirectory(pathLogDir);
-    boost::filesystem::path pathErrorFile = path / "db.log";
+    boost::filesystem::path pathErrorFile = path / "dberr.log";
     LogPrint(BCLog::CDB,"CDBEnv::Open: LogDir=%s ErrorFile=%s\n", pathLogDir.string(), pathErrorFile.string());
 
     unsigned int nEnvFlags = 0;
@@ -101,7 +107,8 @@ bool CDBEnv::Open(const boost::filesystem::path& pathIn)
     dbenv->set_lg_max(1048576);
     dbenv->set_lk_max_locks(40000);
     dbenv->set_lk_max_objects(40000);
-    dbenv->set_errfile(fopen(pathErrorFile.string().c_str(), "a")); /// debug
+    err_file = fopen(pathErrorFile.string().c_str(), "a");
+    dbenv->set_errfile(err_file); /// debug
     dbenv->set_flags(DB_AUTO_COMMIT, 1);
     dbenv->set_flags(DB_TXN_WRITE_NOSYNC, 1);
     dbenv->log_set_config(DB_LOG_AUTO_REMOVE, 1);

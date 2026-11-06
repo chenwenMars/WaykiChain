@@ -22,8 +22,24 @@ using namespace std;
 /*  CCompositeKVCache     prefixType        key                  value           variable  */
 /*  ----------------   --------------      -----------------    --------------   -----------*/
 // cdpr{$Ratio}{$height}{$cdpid} -> CUserCDP
-// height: allows data of the same ratio to be sorted by height
-typedef CCompositeKVCache<dbk::CDP_RATIO, tuple<CCdpCoinPair, CFixedUInt64, CFixedUInt64, uint256>, CUserCDP>      CdpRatioSortedCache;
+// height: allows data of the same ratio to be sorted by height, from low to high
+typedef CCompositeKVCache<dbk::CDP_RATIO_INDEX, tuple<CCdpCoinPair, CFixedUInt64, CFixedUInt64, uint256>, CUserCDP>  CCdpRatioIndexCache;
+// cdpr{$height}{$cdpid} -> CUserCDP
+// cdp sort by height, from low to high
+typedef CCompositeKVCache<dbk::CDP_HEIGHT_INDEX, tuple<CCdpCoinPair, CFixedUInt64, uint256>, CUserCDP> CCdpHeightIndexCache;
+
+class CDBCdpHeightIndexIt: public CDBPrefixIterator<CCdpHeightIndexCache, CCdpCoinPair> {
+public:
+    typedef CDBPrefixIterator<CCdpHeightIndexCache, CCdpCoinPair> Base;
+    using Base::Base;
+
+    uint64_t GetHeight() const {
+        return std::get<1>(GetKey()).value;
+    }
+    const uint256& GetCdpId() const {
+        return std::get<2>(GetKey());
+    }
+};
 
 class CCdpDBCache {
 public:
@@ -39,27 +55,32 @@ public:
     bool GetCDPList(const CRegID &regId, vector<CUserCDP> &cdpList);
     bool GetCDP(const uint256 cdpid, CUserCDP &cdp);
 
-    bool GetCdpListByCollateralRatio(const CCdpCoinPair &cdpCoinPair, const uint64_t collateralRatio,
-            const uint64_t bcoinMedianPrice, CdpRatioSortedCache::Map &userCdps);
+    list<CUserCDP> GetCdpListByCollateralRatio(const CCdpCoinPair &cdpCoinPair, const uint64_t collateralRatio,
+            const uint64_t bcoinMedianPrice);
+
+
+    shared_ptr<CDBCdpHeightIndexIt> CreateCdpHeightIndexIt(const CCdpCoinPair &cdpCoinPair) {
+        return make_shared<CDBCdpHeightIndexIt>(cdp_height_index_cache, cdpCoinPair);
+    }
 
     inline uint64_t GetGlobalStakedBcoins() const;
     inline uint64_t GetGlobalOwedScoins() const;
     CCdpGlobalData GetCdpGlobalData(const CCdpCoinPair &cdpCoinPair) const;
 
-    bool GetCdpCoinPairStatus(const CCdpCoinPair &cdpCoinPair, CdpCoinPairStatus &status);
-    //bool HaveCdpCoinPairStatus(const CCdpCoinPair &cdpCoinPair);
-    bool SetCdpCoinPairStatus(const CCdpCoinPair &cdpCoinPair, const CdpCoinPairStatus &status);
-    map<CCdpCoinPair, CdpCoinPairStatus> GetCdpCoinPairMap();
+    bool GetCdpBcoin(const TokenSymbol &bcoinSymbol, CCdpBcoinDetail &cdpBcoin);
+    bool IsCdpBcoinActivated(const TokenSymbol &bcoinSymbol);
+    bool SetCdpBcoin(const TokenSymbol &bcoinSymbol, const CCdpBcoinDetail &cdpBcoin);
 
     void SetBaseViewPtr(CCdpDBCache *pBaseIn);
     void SetDbOpLogMap(CDBOpLogMap * pDbOpLogMapIn);
 
     void RegisterUndoFunc(UndoDataFuncMap &undoDataFuncMap) {
-        cdpGlobalDataCache.RegisterUndoFunc(undoDataFuncMap);
-        cdpCache.RegisterUndoFunc(undoDataFuncMap);
-        userCdpCache.RegisterUndoFunc(undoDataFuncMap);
-        cdpCoinPairsCache.RegisterUndoFunc(undoDataFuncMap);
-        cdpRatioSortedCache.RegisterUndoFunc(undoDataFuncMap);
+        cdp_global_data_cache.RegisterUndoFunc(undoDataFuncMap);
+        cdp_cache.RegisterUndoFunc(undoDataFuncMap);
+        cdp_bcoin_cache.RegisterUndoFunc(undoDataFuncMap);
+        user_cdp_cache.RegisterUndoFunc(undoDataFuncMap);
+        cdp_ratio_index_cache.RegisterUndoFunc(undoDataFuncMap);
+        cdp_height_index_cache.RegisterUndoFunc(undoDataFuncMap);
     }
 
     uint32_t GetCacheSize() const;
@@ -68,24 +89,25 @@ private:
     bool SaveCDPToDB(const CUserCDP &cdp);
     bool EraseCDPFromDB(const CUserCDP &cdp);
 
-    // Usage: before modification, erase the old cdp; after modification, save the new cdp.
-    bool SaveCDPToRatioDB(const CUserCDP &userCdp);
-    bool EraseCDPFromRatioDB(const CUserCDP &userCdp);
+    bool SaveCdpIndexData(const CUserCDP &userCdp);
+    bool EraseCdpIndexData(const CUserCDP &userCdp);
 
-    CdpRatioSortedCache::KeyType MakeCdpRatioSortedKey(const CUserCDP &cdp);
-private:
+    CCdpRatioIndexCache::KeyType MakeCdpRatioIndexKey(const CUserCDP &cdp);
+    CCdpHeightIndexCache::KeyType MakeCdpHeightIndexKey(const CUserCDP &cdp);
+public:
     /*  CCompositeKVCache  prefixType       key                            value             variable  */
     /*  ---------------- --------------   ------------                --------------    ----- --------*/
     // cdpCoinPair -> total staked assets
-    CCompositeKVCache<  dbk::CDP_GLOBAL_DATA, CCdpCoinPair,   CCdpGlobalData>    cdpGlobalDataCache;
+    CCompositeKVCache<  dbk::CDP_GLOBAL_DATA, CCdpCoinPair,   CCdpGlobalData>    cdp_global_data_cache;
     // cdp{$cdpid} -> CUserCDP
-    CCompositeKVCache<  dbk::CDP,       uint256,                    CUserCDP>           cdpCache;
+    CCompositeKVCache<  dbk::CDP,       uint256,                    CUserCDP>           cdp_cache;
+    // cbca{$bcoin_symbol} -> $cdpBcoinDetail
+    CCompositeKVCache<  dbk::CDP_BCOIN, TokenSymbol,    CCdpBcoinDetail>           cdp_bcoin_cache;
     // ucdp${CRegID}{$cdpCoinPair} -> set<cdpid>
-    CCompositeKVCache<  dbk::USER_CDP, pair<CRegIDKey, CCdpCoinPair>, optional<uint256>> userCdpCache;
-    // [prefix]${cdpCoinPair} -> ${cdpCoinPairStatus}
-    CCompositeKVCache<  dbk::CDP_COIN_PAIRS, CCdpCoinPair, uint8_t> cdpCoinPairsCache;
+    CCompositeKVCache<  dbk::USER_CDP, pair<CRegIDKey, CCdpCoinPair>, optional<uint256>> user_cdp_cache;
     // cdpr{Ratio}{$cdpid} -> CUserCDP
-    CdpRatioSortedCache           cdpRatioSortedCache;
+    CCdpRatioIndexCache          cdp_ratio_index_cache;
+    CCdpHeightIndexCache         cdp_height_index_cache;
 };
 
 enum CDPCloseType: uint8_t {
@@ -143,9 +165,7 @@ public:
         closedCdpTxCache.RegisterUndoFunc(undoDataFuncMap);
         closedTxCdpCache.RegisterUndoFunc(undoDataFuncMap);
     }
-private:
-    CdpRatioSortedCache::KeyType MakeCdpRatioSortedKey(const CUserCDP &cdp);
-private:
+public:
     /*  CCompositeKVCache     prefixType     key               value             variable  */
     /*  ----------------   --------------   ------------   --------------    ----- --------*/
     // ccdp${closed_cdpid} -> <closedCdpTxId, closeType>

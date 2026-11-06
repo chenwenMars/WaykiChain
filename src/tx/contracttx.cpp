@@ -5,38 +5,38 @@
 
 #include "contracttx.h"
 
-#include "entities/vote.h"
+#include "commons/util/util.h"
+#include "vm/luavm/luavmrunenv.h"
 #include "commons/serialize.h"
 #include "crypto/hash.h"
 #include "main.h"
 #include "miner/miner.h"
 #include "persistence/contractdb.h"
 #include "persistence/txdb.h"
-#include "commons/util/util.h"
 #include "config/version.h"
-#include "vm/luavm/luavmrunenv.h"
+
+#include <sstream>
 
 // get and check fuel limit
 static bool GetFuelLimit(CBaseTx &tx, CTxExecuteContext &context, uint64_t &fuelLimit) {
     uint64_t fuelRate = context.fuel_rate;
     if (fuelRate == 0)
-        return context.pState->DoS(100, ERRORMSG("GetFuelLimit, fuelRate cannot be 0"), REJECT_INVALID, "invalid-fuel-rate");
+        return context.pState->DoS(100, ERRORMSG("fuelRate cannot be 0"), REJECT_INVALID, "invalid-fuel-rate");
 
     uint64_t minFee;
-    if (!GetTxMinFee(tx.nTxType, context.height, tx.fee_symbol, minFee))
-        return context.pState->DoS(100, ERRORMSG("GetFuelLimit, get minFee failed"), REJECT_INVALID, "get-min-fee-failed");
+    if (!GetTxMinFee(*context.pCw, tx.nTxType, context.height, tx.fee_symbol, minFee))
+        return context.pState->DoS(100, ERRORMSG("get minFee failed"), REJECT_INVALID, "get-min-fee-failed");
+
+    if (!tx.CheckMinFee(context, minFee)) return false;
 
     assert(tx.llFees >= minFee);
-
     uint64_t reservedFeesForMiner = minFee * CONTRACT_CALL_RESERVED_FEES_RATIO / 100;
     uint64_t reservedFeesForGas   = tx.llFees - reservedFeesForMiner;
 
-    fuelLimit = std::min<uint64_t>((reservedFeesForGas / fuelRate) * 100, MAX_BLOCK_RUN_STEP);
+    fuelLimit = std::min<uint64_t>((reservedFeesForGas / fuelRate) * 100, MAX_BLOCK_FUEL);
 
-    if (fuelLimit == 0) {
-        return context.pState->DoS(100, ERRORMSG("GetFuelLimit, fuelLimit == 0"), REJECT_INVALID,
-                                   "fuel-limit-equals-zero");
-    }
+    if (fuelLimit == 0)
+        return context.pState->DoS(100, ERRORMSG("fuelLimit == 0"), REJECT_INVALID, "fuel-limit-equals-zero");
 
     return true;
 }
@@ -46,43 +46,30 @@ static bool GetFuelLimit(CBaseTx &tx, CTxExecuteContext &context, uint64_t &fuel
 
 bool CLuaContractDeployTx::CheckTx(CTxExecuteContext &context) {
     IMPLEMENT_DEFINE_CW_STATE;
-    IMPLEMENT_CHECK_TX_REGID(txUid);
-    if (!CheckFee(context)) return false;
 
-    if (!contract.IsValid()) {
-        return state.DoS(100, ERRORMSG("CLuaContractDeployTx::CheckTx, contract is invalid"),
-                         REJECT_INVALID, "vmscript-invalid");
-    }
+    if (!contract.IsValid())
+        return state.DoS(100, ERRORMSG("contract is invalid"), REJECT_INVALID, "vmscript-invalid");
 
-    uint64_t llFuel = GetFuel(context.height, context.fuel_rate);
-    if (llFees < llFuel) {
-        return state.DoS(100, ERRORMSG("CLuaContractDeployTx::CheckTx, fee too small to cover fuel: %llu < %llu",
-                        llFees, llFuel), REJECT_INVALID, "fee-too-small-to-cover-fuel");
-    }
+    uint64_t fuelFee = GetFuelFee(cw, context.height, context.fuel_rate);
+    if (llFees < fuelFee)
+        return state.DoS(100, ERRORMSG("the given fee is small than burned fuel fee: %llu < %llu",
+                        llFees, fuelFee), REJECT_INVALID, "fee-too-small-for-burned-fuel");
 
     if (GetFeatureForkVersion(context.height) >= MAJOR_VER_R2) {
         int32_t txSize  = ::GetSerializeSize(GetNewInstance(), SER_NETWORK, PROTOCOL_VERSION);
-        double feePerKb = double(llFees - llFuel) / txSize * 1000.0;
+        double feePerKb = double(llFees - fuelFee) / txSize * 1000.0;
         if (feePerKb < MIN_RELAY_TX_FEE) {
-            uint64_t minFee = ceil(double(MIN_RELAY_TX_FEE) * txSize / 1000.0 + llFuel);
-            return state.DoS(100, ERRORMSG("CLuaContractDeployTx::CheckTx, fee too small in fee/kb: %llu < %llu",
+            uint64_t minFee = ceil(double(MIN_RELAY_TX_FEE) * txSize / 1000.0 + fuelFee);
+            return state.DoS(100, ERRORMSG(" fee too small in fee/kb: %llu < %llu",
                             llFees, minFee), REJECT_INVALID,
                             strprintf("fee-too-small-in-fee/kb: %llu < %llu", llFees, minFee));
         }
     }
 
-    CAccount account;
-    if (!cw.accountCache.GetAccount(txUid, account)) {
-        return state.DoS(100, ERRORMSG("CLuaContractDeployTx::CheckTx, get account failed"),
-                         REJECT_INVALID, "bad-getaccount");
+    if (!sp_tx_account->HasOwnerPubKey()) {
+        return state.DoS(100, ERRORMSG("account unregistered! txUid=%s", txUid.ToString()), REJECT_INVALID,
+                         "account-unregistered");
     }
-
-    if (!account.HaveOwnerPubKey()) {
-        return state.DoS(100, ERRORMSG("CLuaContractDeployTx::CheckTx, account unregistered"), REJECT_INVALID,
-                         "bad-account-unregistered");
-    }
-
-    IMPLEMENT_CHECK_TX_SIGNATURE(account.owner_pubkey);
 
     return true;
 }
@@ -91,54 +78,45 @@ bool CLuaContractDeployTx::ExecuteTx(CTxExecuteContext &context) {
     CCacheWrapper &cw       = *context.pCw;
     CValidationState &state = *context.pState;
 
-    CAccount account;
-    if (!cw.accountCache.GetAccount(txUid, account)) {
-        return state.DoS(100, ERRORMSG("CLuaContractDeployTx::ExecuteTx, read regist addr %s account info error", txUid.ToString()),
-                         UPDATE_ACCOUNT_FAIL, "bad-read-accountdb");
-    }
-
-    CAccount accountLog(account);
-    if (!account.OperateBalance(SYMB::WICC, BalanceOpType::SUB_FREE, llFees)) {
-            return state.DoS(100, ERRORMSG("CLuaContractDeployTx::ExecuteTx, operate account failed ,regId=%s",
-                            txUid.ToString()), UPDATE_ACCOUNT_FAIL, "operate-account-failed");
-    }
-
-    if (!cw.accountCache.SetAccount(CUserID(account.keyid), account))
-        return state.DoS(100, ERRORMSG("CLuaContractDeployTx::ExecuteTx, save account info error"), UPDATE_ACCOUNT_FAIL,
-                         "bad-save-accountdb");
-
     // create script account
     CAccount contractAccount;
     CRegID contractRegId(context.height, context.index);
-    CKeyID keyId           = Hash160(contractRegId.GetRegIdRaw());
-    contractAccount.keyid  = keyId;
-    contractAccount.regid  = contractRegId;
-    contractAccount.nickid = CNickID();
+    CKeyID keyid = Hash160(contractRegId.GetRegIdRaw());
+
+    auto spContractAccount = NewAccount(cw, keyid);
+    if (!RegisterAccount(context, nullptr/*pPubkey*/, *spContractAccount)) // generate new regid for the account
+        return false;
+    assert(spContractAccount->regid  == contractRegId);
 
     // save new script content
-    if (!cw.contractCache.SaveContract(contractRegId, CUniversalContract(contract.code, contract.memo))) {
-        return state.DoS(100, ERRORMSG("CLuaContractDeployTx::ExecuteTx, save code for contract id %s error",
-                        contractRegId.ToString()), UPDATE_ACCOUNT_FAIL, "bad-save-scriptdb");
-    }
+    CUniversalContractStore contractStore = {
+        VMType::LUA_VM,
+        sp_tx_account->regid,   // maintainer
+        false,
+        contract.code,
+        contract.memo,
+        "",                     // abi
+        HashOnce(contract.code.data(), contract.code.size())
+    };
 
-    if (!cw.accountCache.SaveAccount(contractAccount)) {
-        return state.DoS(100, ERRORMSG("CLuaContractDeployTx::ExecuteTx, create new account script id %s script info error",
+    if (!cw.contractCache.SaveContract(contractRegId, contractStore))
+        return state.DoS(100, ERRORMSG("save code for contract id %s error",
                         contractRegId.ToString()), UPDATE_ACCOUNT_FAIL, "bad-save-scriptdb");
-    }
 
-    nRunStep = contract.GetContractSize();
+    fuel = contract.GetContractSize();
 
     return true;
 }
 
-uint64_t CLuaContractDeployTx::GetFuel(int32_t height, uint32_t nFuelRate) {
+uint64_t CLuaContractDeployTx::GetFuelFee(CCacheWrapper &cw, int32_t height, uint32_t nFuelRate) {
     uint64_t minFee = 0;
-    if (!GetTxMinFee(nTxType, height, fee_symbol, minFee)) {
-        LogPrint(BCLog::ERROR, "CUniversalContractDeployTx::GetFuel(), get min_fee failed! fee_symbol=%s\n", fee_symbol);
-        throw runtime_error("CUniversalContractDeployTx::GetFuel(), get min_fee failed");
+    if (!GetTxMinFee(cw, nTxType, height, fee_symbol, minFee)) {
+        LogPrint(BCLog::ERROR, "get min_fee failed! fee_symbol=%s\n", fee_symbol);
+
+        throw runtime_error("UCONTRACT_DEPLOY_TX::GetFuelFee(), get min_fee failed");
     }
 
-    return std::max<uint64_t>(((nRunStep / 100.0f) * nFuelRate), minFee);
+    return std::max<uint64_t>(((fuel / 100.0f) * nFuelRate), minFee);
 }
 
 string CLuaContractDeployTx::ToString(CAccountDBCache &accountCache) {
@@ -146,12 +124,12 @@ string CLuaContractDeployTx::ToString(CAccountDBCache &accountCache) {
     accountCache.GetKeyId(txUid, keyId);
 
     return strprintf("txType=%s, hash=%s, ver=%d, txUid=%s, addr=%s, llFees=%llu, valid_height=%d",
-                     GetTxType(nTxType), GetHash().ToString(), nVersion, txUid.ToString(), keyId.ToAddress(), llFees,
-                     valid_height);
+                     GetTxType(nTxType), GetHash().ToString(), nVersion, txUid.ToString(), keyId.ToAddress(),
+                     llFees, valid_height);
 }
 
-Object CLuaContractDeployTx::ToJson(const CAccountDBCache &accountCache) const {
-    Object result = CBaseTx::ToJson(accountCache);
+Object CLuaContractDeployTx::ToJson(CCacheWrapper &cw) const {
+    Object result = CBaseTx::ToJson(cw);
 
     result.push_back(Pair("contract_code", HexStr(contract.code)));
     result.push_back(Pair("contract_memo", HexStr(contract.memo)));
@@ -165,26 +143,16 @@ Object CLuaContractDeployTx::ToJson(const CAccountDBCache &accountCache) const {
 bool CLuaContractInvokeTx::CheckTx(CTxExecuteContext &context) {
     IMPLEMENT_DEFINE_CW_STATE;
     IMPLEMENT_CHECK_TX_ARGUMENTS;
-    IMPLEMENT_CHECK_TX_REGID_OR_PUBKEY(txUid);
+
     IMPLEMENT_CHECK_TX_APPID(app_uid);
-    if (!CheckFee(context)) return false;
 
     if ((txUid.is<CPubKey>()) && !txUid.get<CPubKey>().IsFullyValid())
-        return state.DoS(100, ERRORMSG("CLuaContractInvokeTx::CheckTx, public key is invalid"), REJECT_INVALID,
-                         "bad-publickey");
+        return state.DoS(100, ERRORMSG("public key is invalid"), REJECT_INVALID, "bad-publickey");
 
-    CAccount srcAccount;
-    if (!cw.accountCache.GetAccount(txUid, srcAccount))
-        return state.DoS(100, ERRORMSG("CLuaContractInvokeTx::CheckTx, read account failed, tx_uid=%s",
-                        txUid.ToDebugString()), REJECT_INVALID, "bad-getaccount");
-
-    CUniversalContract contract;
-    if (!cw.contractCache.GetContract(app_uid.get<CRegID>(), contract))
-        return state.DoS(100, ERRORMSG("CLuaContractInvokeTx::CheckTx, read script failed, regId=%s",
+    CUniversalContractStore contractStore;
+    if (!cw.contractCache.GetContract(app_uid.get<CRegID>(), contractStore))
+        return state.DoS(100, ERRORMSG("read script failed, regId=%s",
                         app_uid.get<CRegID>().ToString()), REJECT_INVALID, "bad-read-script");
-
-    CPubKey pubKey = (txUid.is<CPubKey>() ? txUid.get<CPubKey>() : srcAccount.owner_pubkey);
-    IMPLEMENT_CHECK_TX_SIGNATURE(pubKey);
 
     return true;
 }
@@ -197,47 +165,22 @@ bool CLuaContractInvokeTx::ExecuteTx(CTxExecuteContext &context) {
     if (!GetFuelLimit(*this, context, fuelLimit))
         return false;
 
-    CAccount srcAccount;
-    if (!cw.accountCache.GetAccount(txUid, srcAccount)) {
-        return state.DoS(100, ERRORMSG("CLuaContractInvokeTx::ExecuteTx, read source addr account info error"),
-                         READ_ACCOUNT_FAIL, "bad-read-accountdb");
-    }
+    auto spAppAccount = GetAccount(context, app_uid, "app_uid");
+    if (!spAppAccount) return false;
 
-    if (!GenerateRegID(context, srcAccount)) {
-        return false;
-    }
-
-    if (!srcAccount.OperateBalance(SYMB::WICC, BalanceOpType::SUB_FREE, llFees + coin_amount))
-        return state.DoS(100, ERRORMSG("CLuaContractInvokeTx::ExecuteTx, accounts hash insufficient funds"),
+    if (coin_amount > 0 && !sp_tx_account->OperateBalance(SYMB::WICC, BalanceOpType::SUB_FREE, coin_amount,
+                                ReceiptType::LUAVM_TRANSFER_ACTUAL_COINS, receipts, spAppAccount.get()))
+        return state.DoS(100, ERRORMSG("txAccount has insufficient funds"),
                          UPDATE_ACCOUNT_FAIL, "operate-minus-account-failed");
 
-    if (!cw.accountCache.SetAccount(CUserID(srcAccount.keyid), srcAccount))
-        return state.DoS(100, ERRORMSG("CLuaContractInvokeTx::ExecuteTx, save account info error"),
-                         WRITE_ACCOUNT_FAIL, "bad-write-accountdb");
-
-    CAccount desAccount;
-    if (!cw.accountCache.GetAccount(app_uid, desAccount)) {
-        return state.DoS(100, ERRORMSG("CLuaContractInvokeTx::ExecuteTx, get account info failed by regid:%s",
-                        app_uid.get<CRegID>().ToString()), READ_ACCOUNT_FAIL, "bad-read-accountdb");
-    }
-
-    if (!desAccount.OperateBalance(SYMB::WICC, BalanceOpType::ADD_FREE, coin_amount)) {
-        return state.DoS(100, ERRORMSG("CLuaContractInvokeTx::ExecuteTx, operate accounts error"),
-                        UPDATE_ACCOUNT_FAIL, "operate-add-account-failed");
-    }
-
-    if (!cw.accountCache.SetAccount(app_uid, desAccount))
-        return state.DoS(100, ERRORMSG("CLuaContractInvokeTx::ExecuteTx, save account error, kyeId=%s",
-                        desAccount.keyid.ToString()), UPDATE_ACCOUNT_FAIL, "bad-save-account");
-
-    CUniversalContract contract;
-    if (!cw.contractCache.GetContract(app_uid.get<CRegID>(), contract))
-        return state.DoS(100, ERRORMSG("CLuaContractInvokeTx::ExecuteTx, read script failed, regId=%s",
+    CUniversalContractStore contractStore;
+    if (!cw.contractCache.GetContract(app_uid.get<CRegID>(), contractStore))
+        return state.DoS(100, ERRORMSG("read script failed, regId=%s",
                         app_uid.get<CRegID>().ToString()), READ_ACCOUNT_FAIL, "bad-read-script");
 
     CLuaVMRunEnv vmRunEnv;
-
     CLuaVMContext luaContext;
+
     luaContext.p_cw              = &cw;
     luaContext.height            = context.height;
     luaContext.block_time        = context.block_time;
@@ -246,24 +189,20 @@ bool CLuaContractInvokeTx::ExecuteTx(CTxExecuteContext &context) {
     luaContext.fuel_limit        = fuelLimit;
     luaContext.transfer_symbol   = SYMB::WICC;
     luaContext.transfer_amount   = coin_amount;
-    luaContext.p_tx_user_account = &srcAccount;
-    luaContext.p_app_account     = &desAccount;
-    luaContext.p_contract        = &contract;
+    luaContext.sp_tx_account     = sp_tx_account;
+    luaContext.sp_app_account    = spAppAccount;
+    luaContext.p_contract        = &contractStore;
     luaContext.p_arguments       = &arguments;
 
     int64_t llTime = GetTimeMillis();
-    auto pExecErr  = vmRunEnv.ExecuteContract(&luaContext, nRunStep);
-    if (pExecErr)
-        return state.DoS(100, ERRORMSG("CLuaContractInvokeTx::ExecuteTx, txid=%s run script error:%s",
-                        GetHash().GetHex(), *pExecErr), UPDATE_ACCOUNT_FAIL, "run-script-error: " + *pExecErr);
+    string errMsg;
+    if (!vmRunEnv.ExecuteContract(&luaContext, fuel, errMsg))
+        return state.DoS(100, ERRORMSG("txid=%s run script error:%s", GetHash().GetHex(), errMsg),
+                        UPDATE_ACCOUNT_FAIL, "run-script-error: " + errMsg);
 
     LogPrint(BCLog::LUAVM, "execute contract elapse: %lld, txid=%s\n", GetTimeMillis() - llTime, GetHash().GetHex());
 
-    if (!cw.txReceiptCache.SetTxReceipts(GetHash(), vmRunEnv.GetReceipts()))
-        return state.DoS(
-            100, ERRORMSG("CLuaContractInvokeTx::ExecuteTx, set tx receipts failed!! txid=%s", GetHash().ToString()),
-            REJECT_INVALID, "set-tx-receipt-failed");
-
+    container::Append(receipts, vmRunEnv.GetReceipts());
     return true;
 }
 
@@ -275,12 +214,12 @@ string CLuaContractInvokeTx::ToString(CAccountDBCache &accountCache) {
         HexStr(arguments), valid_height);
 }
 
-Object CLuaContractInvokeTx::ToJson(const CAccountDBCache &accountCache) const {
-    Object result = CBaseTx::ToJson(accountCache);
+Object CLuaContractInvokeTx::ToJson(CCacheWrapper &cw) const {
+    Object result = CBaseTx::ToJson(cw);
 
-    CKeyID desKeyId;
-    accountCache.GetKeyId(app_uid, desKeyId);
-    result.push_back(Pair("to_addr",        desKeyId.ToAddress()));
+    CKeyID appKeyId;
+    cw.accountCache.GetKeyId(app_uid, appKeyId);
+    result.push_back(Pair("to_addr",        appKeyId.ToAddress()));
     result.push_back(Pair("to_uid",         app_uid.ToString()));
     result.push_back(Pair("coin_symbol",    SYMB::WICC));
     result.push_back(Pair("coin_amount",    coin_amount));
@@ -294,47 +233,30 @@ Object CLuaContractInvokeTx::ToJson(const CAccountDBCache &accountCache) const {
 
 bool CUniversalContractDeployTx::CheckTx(CTxExecuteContext &context) {
     IMPLEMENT_DEFINE_CW_STATE;
-    IMPLEMENT_DISABLE_TX_PRE_STABLE_COIN_RELEASE;
-    IMPLEMENT_CHECK_TX_REGID(txUid);
-    if (!CheckFee(context)) return false;
 
-    if (contract.vm_type != VMType::LUA_VM) {
-        return state.DoS(100, ERRORMSG("CUniversalContractDeployTx::CheckTx, support LuaVM only"), REJECT_INVALID,
-                         "vm-type-error");
-    }
+    if (contract.vm_type != VMType::LUA_VM)
+        return state.DoS(100, ERRORMSG("support LuaVM only"), REJECT_INVALID, "vm-type-error");
 
-    if (!contract.IsValid()) {
-        return state.DoS(100, ERRORMSG("CUniversalContractDeployTx::CheckTx, contract is invalid"),
-                         REJECT_INVALID, "vmscript-invalid");
-    }
+    if (!contract.IsValid())
+        return state.DoS(100, ERRORMSG("contract is invalid"), REJECT_INVALID, "vmscript-invalid");
 
-    uint64_t llFuel = GetFuel(context.height, context.fuel_rate);
-    if (llFees < llFuel) {
-        return state.DoS(100, ERRORMSG("CUniversalContractDeployTx::CheckTx, fee too small to cover fuel: %llu < %llu",
-                        llFees, llFuel), REJECT_INVALID, "fee-too-small-to-cover-fuel");
-    }
+    uint64_t fuelFee = GetFuelFee(cw, context.height, context.fuel_rate);
+    if (llFees < fuelFee)
+        return state.DoS(100, ERRORMSG("the given fee is small than burned fuel fee: %llu < %llu",
+                        llFees, fuelFee), REJECT_INVALID, "fee-too-small-for-burned-fuel");
 
     int32_t txSize  = ::GetSerializeSize(GetNewInstance(), SER_NETWORK, PROTOCOL_VERSION);
-    double feePerKb = double(llFees - llFuel) / txSize * 1000.0;
+    double feePerKb = double(llFees - fuelFee) / txSize * 1000.0;
     if (feePerKb < MIN_RELAY_TX_FEE) {
-        uint64_t minFee = ceil(double(MIN_RELAY_TX_FEE) * txSize / 1000.0 + llFuel);
-        return state.DoS(100, ERRORMSG("CUniversalContractDeployTx::CheckTx, fee too small in fee/kb: %llu < %llu",
-                        llFees, minFee), REJECT_INVALID,
-                        strprintf("fee-too-small-in-fee/kb: %llu < %llu", llFees, minFee));
+        uint64_t minFee = ceil(double(MIN_RELAY_TX_FEE) * txSize / 1000.0 + fuelFee);
+        return state.DoS(100, ERRORMSG("fee too small in fee/kb: %llu < %llu", llFees, minFee),
+                        REJECT_INVALID, strprintf("fee-too-small-in-fee/kb: %llu < %llu", llFees, minFee));
     }
 
-    CAccount account;
-    if (!cw.accountCache.GetAccount(txUid, account)) {
-        return state.DoS(100, ERRORMSG("CUniversalContractDeployTx::CheckTx, get account failed"),
-                         REJECT_INVALID, "bad-getaccount");
+    if (!sp_tx_account->HasOwnerPubKey()) {
+        return state.DoS(100, ERRORMSG("account unregistered! txUid=%s", txUid.ToString()), REJECT_INVALID,
+                         "account-unregistered");
     }
-
-    if (!account.HaveOwnerPubKey()) {
-        return state.DoS(100, ERRORMSG("CUniversalContractDeployTx::CheckTx, account unregistered"),
-            REJECT_INVALID, "bad-account-unregistered");
-    }
-
-    IMPLEMENT_CHECK_TX_SIGNATURE(account.owner_pubkey);
 
     return true;
 }
@@ -343,76 +265,55 @@ bool CUniversalContractDeployTx::ExecuteTx(CTxExecuteContext &context) {
     CCacheWrapper &cw       = *context.pCw;
     CValidationState &state = *context.pState;
 
-    CAccount account;
-    if (!cw.accountCache.GetAccount(txUid, account)) {
-        return state.DoS(100, ERRORMSG("CUniversalContractDeployTx::ExecuteTx, read regist addr %s account info error",
-                        txUid.ToString()), UPDATE_ACCOUNT_FAIL, "bad-read-accountdb");
-    }
-
-    CAccount accountLog(account);
-    if (!account.OperateBalance(fee_symbol, BalanceOpType::SUB_FREE, llFees)) {
-            return state.DoS(100, ERRORMSG("CUniversalContractDeployTx::ExecuteTx, operate account failed ,regId=%s",
-                            txUid.ToString()), UPDATE_ACCOUNT_FAIL, "operate-account-failed");
-    }
-
-    if (!cw.accountCache.SetAccount(CUserID(account.keyid), account))
-        return state.DoS(100, ERRORMSG("CUniversalContractDeployTx::ExecuteTx, save account info error"),
-                         UPDATE_ACCOUNT_FAIL, "bad-save-accountdb");
-
     // create script account
-    CAccount contractAccount;
     CRegID contractRegId(context.height, context.index);
-    CKeyID keyId           = Hash160(contractRegId.GetRegIdRaw());
-    contractAccount.keyid  = keyId;
-    contractAccount.regid  = contractRegId;
-    contractAccount.nickid = CNickID();
+    CKeyID keyid = Hash160(contractRegId.GetRegIdRaw());
+
+    auto spContractAccount = NewAccount(cw, keyid);
+    if (!RegisterAccount(context, nullptr/*pPubkey*/, *spContractAccount)) // generate new regid for the account
+        return false;
+    assert(spContractAccount->regid  == contractRegId);
 
     // save new script content
-    if (!cw.contractCache.SaveContract(contractRegId, contract)) {
-        return state.DoS(100, ERRORMSG("CUniversalContractDeployTx::ExecuteTx, save code for contract id %s error",
+    CUniversalContractStore contractStore = {
+        contract.vm_type,
+        sp_tx_account->regid,   // maintainer
+        contract.upgradable,
+        contract.code,
+        contract.memo,
+        contract.abi,          // abi
+        HashOnce(contract.code.data(), contract.code.size())
+    };
+    if (!cw.contractCache.SaveContract(contractRegId, contractStore))
+        return state.DoS(100, ERRORMSG("save code for contract id %s error",
                         contractRegId.ToString()), UPDATE_ACCOUNT_FAIL, "bad-save-scriptdb");
-    }
-    if (!cw.accountCache.SaveAccount(contractAccount)) {
-        return state.DoS(100, ERRORMSG("CUniversalContractDeployTx::ExecuteTx, create new account script id %s script info error",
-                        contractRegId.ToString()), UPDATE_ACCOUNT_FAIL, "bad-save-scriptdb");
-    }
 
-    nRunStep = contract.GetContractSize();
+    fuel = contract.GetContractSize();
 
     // If fees paid by WUSD, send the fuel to risk reserve pool.
     if (fee_symbol == SYMB::WUSD) {
-        uint64_t fuel = GetFuel(context.height, context.fuel_rate);
-        CAccount fcoinGenesisAccount;
-        cw.accountCache.GetFcoinGenesisAccount(fcoinGenesisAccount);
+        uint64_t fuel = GetFuelFee(cw, context.height, context.fuel_rate);
+        auto spFcoinAccount = GetAccount(context, SysCfg().GetFcoinGenesisRegId(), "fcoin");
+        if (!spFcoinAccount) return false;
 
-        if (!fcoinGenesisAccount.OperateBalance(SYMB::WUSD, BalanceOpType::ADD_FREE, fuel)) {
-            return state.DoS(100, ERRORMSG("CUniversalContractDeployTx::ExecuteTx, operate balance failed"),
+        if (!spFcoinAccount->OperateBalance(SYMB::WUSD, BalanceOpType::ADD_FREE, fuel,
+                                                ReceiptType::CONTRACT_FUEL_TO_RISK_RESERVE, receipts)) {
+            return state.DoS(100, ERRORMSG("operate balance failed"),
                              UPDATE_ACCOUNT_FAIL, "operate-scoins-genesis-account-failed");
         }
-
-        if (!cw.accountCache.SetAccount(fcoinGenesisAccount.keyid, fcoinGenesisAccount))
-            return state.DoS(100, ERRORMSG("CUniversalContractDeployTx::ExecuteTx, write fcoin genesis account info error!"),
-                             UPDATE_ACCOUNT_FAIL, "bad-write-accountdb");
-
-        CUserID fcoinGenesisUid(fcoinGenesisAccount.regid);
-        CReceipt receipt(nullId, fcoinGenesisUid, SYMB::WUSD, fuel, ReceiptCode::CONTRACT_FUEL_TO_RISK_RESERVE);
-
-        if (!cw.txReceiptCache.SetTxReceipts(GetHash(), {receipt}))
-            return state.DoS(100, ERRORMSG("CUniversalContractDeployTx::ExecuteTx, set tx receipts failed!! txid=%s",
-                            GetHash().ToString()), REJECT_INVALID, "set-tx-receipt-failed");
     }
 
     return true;
 }
 
-uint64_t CUniversalContractDeployTx::GetFuel(int32_t height, uint32_t nFuelRate) {
+uint64_t CUniversalContractDeployTx::GetFuelFee(CCacheWrapper &cw, int32_t height, uint32_t nFuelRate) {
     uint64_t minFee = 0;
-    if (!GetTxMinFee(nTxType, height, fee_symbol, minFee)) {
-        LogPrint(BCLog::ERROR, "CUniversalContractDeployTx::GetFuel(), get min_fee failed! fee_symbol=%s\n", fee_symbol);
-        throw runtime_error("CUniversalContractDeployTx::GetFuel(), get min_fee failed");
+    if (!GetTxMinFee(cw, nTxType, height, fee_symbol, minFee)) {
+        LogPrint(BCLog::ERROR, "get min_fee failed! fee_symbol=%s\n", fee_symbol);
+        throw runtime_error("CUniversalContractDeployTx::GetFuelFee(), get min_fee failed");
     }
 
-    return std::max<uint64_t>(((nRunStep / 100.0f) * nFuelRate), minFee);
+    return std::max<uint64_t>(((fuel / 100.0f) * nFuelRate), minFee);
 }
 
 string CUniversalContractDeployTx::ToString(CAccountDBCache &accountCache) {
@@ -424,8 +325,8 @@ string CUniversalContractDeployTx::ToString(CAccountDBCache &accountCache) {
                      fee_symbol, llFees, valid_height);
 }
 
-Object CUniversalContractDeployTx::ToJson(const CAccountDBCache &accountCache) const {
-    Object result = CBaseTx::ToJson(accountCache);
+Object CUniversalContractDeployTx::ToJson(CCacheWrapper &cw) const {
+    Object result = CBaseTx::ToJson(cw);
 
     result.push_back(Pair("vm_type",    contract.vm_type));
     result.push_back(Pair("upgradable", contract.upgradable));
@@ -441,38 +342,27 @@ Object CUniversalContractDeployTx::ToJson(const CAccountDBCache &accountCache) c
 
 bool CUniversalContractInvokeTx::CheckTx(CTxExecuteContext &context) {
     IMPLEMENT_DEFINE_CW_STATE;
-    IMPLEMENT_DISABLE_TX_PRE_STABLE_COIN_RELEASE;
+
     IMPLEMENT_CHECK_TX_ARGUMENTS;
-    IMPLEMENT_CHECK_TX_REGID_OR_PUBKEY(txUid);
     IMPLEMENT_CHECK_TX_APPID(app_uid);
-    if (!CheckFee(context)) return false;
 
     if ((txUid.is<CPubKey>()) && !txUid.get<CPubKey>().IsFullyValid())
-        return state.DoS(100, ERRORMSG("CUniversalContractInvokeTx::CheckTx, public key is invalid"), REJECT_INVALID,
+        return state.DoS(100, ERRORMSG("public key is invalid"), REJECT_INVALID,
                          "bad-publickey");
 
-    CAccount srcAccount;
-    if (!cw.accountCache.GetAccount(txUid, srcAccount))
-        return state.DoS(100, ERRORMSG("CUniversalContractInvokeTx::CheckTx, read account failed, txUid=%s",
-                        txUid.ToDebugString()), REJECT_INVALID, "bad-getaccount");
 
     if (SysCfg().NetworkID() == TEST_NET && context.height < 260000) {
         // TODO: remove me if reset testnet.
     } else {
-        auto pSymbolErr = cw.assetCache.CheckTransferCoinSymbol(coin_symbol);
-        if (pSymbolErr) {
-            return state.DoS(100, ERRORMSG("CUniversalContractInvokeTx::CheckTx, invalid coin_symbol=%s, %s",
-                            coin_symbol, *pSymbolErr), REJECT_INVALID, "invalid-coin-symbol");
-        }
+        if (!cw.assetCache.CheckAsset(coin_symbol))
+            return state.DoS(100, ERRORMSG("invalid coin_symbol=%s", coin_symbol),
+                                REJECT_INVALID, "invalid-coin-symbol");
     }
 
-    CUniversalContract contract;
-    if (!cw.contractCache.GetContract(app_uid.get<CRegID>(), contract))
-        return state.DoS(100, ERRORMSG("CUniversalContractInvokeTx::CheckTx, read script failed, regId=%s",
+    CUniversalContractStore contractStore;
+    if (!cw.contractCache.GetContract(app_uid.get<CRegID>(), contractStore))
+        return state.DoS(100, ERRORMSG("read script failed, regId=%s",
                         app_uid.get<CRegID>().ToString()), REJECT_INVALID, "bad-read-script");
-
-    CPubKey pubKey = (txUid.is<CPubKey>() ? txUid.get<CPubKey>() : srcAccount.owner_pubkey);
-    IMPLEMENT_CHECK_TX_SIGNATURE(pubKey);
 
     return true;
 }
@@ -485,53 +375,22 @@ bool CUniversalContractInvokeTx::ExecuteTx(CTxExecuteContext &context) {
     if (!GetFuelLimit(*this, context, fuelLimit))
         return false;
 
-    vector<CReceipt> receipts;
+    auto spAppAccount = GetAccount(context, app_uid, "app_uid");
+    if (!spAppAccount) return false;
 
-    CAccount srcAccount;
-    if (!cw.accountCache.GetAccount(txUid, srcAccount)) {
-        return state.DoS(100, ERRORMSG("CUniversalContractInvokeTx::ExecuteTx, read source addr account info error"),
-                         READ_ACCOUNT_FAIL, "bad-read-accountdb");
-    }
-
-    if (!GenerateRegID(context, srcAccount)) {
-        return false;
-    }
-
-    if (!srcAccount.OperateBalance(fee_symbol, BalanceOpType::SUB_FREE, llFees))
-        return state.DoS(100, ERRORMSG("CUniversalContractInvokeTx::ExecuteTx, accounts hash insufficient funds"),
+    if (!sp_tx_account->OperateBalance(coin_symbol, BalanceOpType::SUB_FREE, coin_amount,
+                                  ReceiptType::LUAVM_TRANSFER_ACTUAL_COINS, receipts, spAppAccount.get()))
+        return state.DoS(100, ERRORMSG("txAccount has insufficient funds"),
                          UPDATE_ACCOUNT_FAIL, "operate-minus-account-failed");
 
-    if (!srcAccount.OperateBalance(coin_symbol, BalanceOpType::SUB_FREE, coin_amount))
-        return state.DoS(100, ERRORMSG("CUniversalContractInvokeTx::ExecuteTx, accounts hash insufficient funds"),
-                         UPDATE_ACCOUNT_FAIL, "operate-minus-account-failed");
-
-    if (!cw.accountCache.SetAccount(CUserID(srcAccount.keyid), srcAccount))
-        return state.DoS(100, ERRORMSG("CUniversalContractInvokeTx::ExecuteTx, save account info error"),
-                         WRITE_ACCOUNT_FAIL, "bad-write-accountdb");
-
-    CAccount desAccount;
-    if (!cw.accountCache.GetAccount(app_uid, desAccount)) {
-        return state.DoS(100, ERRORMSG("CUniversalContractInvokeTx::ExecuteTx, get account info failed by regid:%s",
-                        app_uid.get<CRegID>().ToString()), READ_ACCOUNT_FAIL, "bad-read-accountdb");
-    }
-
-    if (!desAccount.OperateBalance(coin_symbol, BalanceOpType::ADD_FREE, coin_amount)) {
-        return state.DoS(100, ERRORMSG("CUniversalContractInvokeTx::ExecuteTx, operate accounts error"),
-                        UPDATE_ACCOUNT_FAIL, "operate-add-account-failed");
-    }
-
-    if (!cw.accountCache.SetAccount(app_uid, desAccount))
-        return state.DoS(100, ERRORMSG("CUniversalContractInvokeTx::ExecuteTx, save account error, kyeId=%s",
-                        desAccount.keyid.ToString()), UPDATE_ACCOUNT_FAIL, "bad-save-account");
-
-    CUniversalContract contract;
-    if (!cw.contractCache.GetContract(app_uid.get<CRegID>(), contract))
-        return state.DoS(100, ERRORMSG("CUniversalContractInvokeTx::ExecuteTx, read script failed, regId=%s",
-                        app_uid.get<CRegID>().ToString()), READ_ACCOUNT_FAIL, "bad-read-script");
+    CUniversalContractStore contractStore;
+    if (!cw.contractCache.GetContract(app_uid.get<CRegID>(), contractStore))
+        return state.DoS(100, ERRORMSG("read contract failed, regId=%s", app_uid.get<CRegID>().ToString()),
+                        READ_ACCOUNT_FAIL, "bad-read-contract");
 
     CLuaVMRunEnv vmRunEnv;
-
     CLuaVMContext luaContext;
+
     luaContext.p_cw              = &cw;
     luaContext.height            = context.height;
     luaContext.block_time        = context.block_time;
@@ -540,16 +399,16 @@ bool CUniversalContractInvokeTx::ExecuteTx(CTxExecuteContext &context) {
     luaContext.fuel_limit        = fuelLimit;
     luaContext.transfer_symbol   = coin_symbol;
     luaContext.transfer_amount   = coin_amount;
-    luaContext.p_tx_user_account = &srcAccount;
-    luaContext.p_app_account     = &desAccount;
-    luaContext.p_contract        = &contract;
+    luaContext.sp_tx_account     = sp_tx_account;
+    luaContext.sp_app_account    = spAppAccount;
+    luaContext.p_contract        = &contractStore;
     luaContext.p_arguments       = &arguments;
 
     int64_t llTime = GetTimeMillis();
-    auto pExecErr  = vmRunEnv.ExecuteContract(&luaContext, nRunStep);
-    if (pExecErr)
-        return state.DoS(100, ERRORMSG("CUniversalContractInvokeTx::ExecuteTx, txid=%s run script error:%s",
-            GetHash().GetHex(), *pExecErr), UPDATE_ACCOUNT_FAIL, "run-script-error: " + *pExecErr);
+    string errMsg;
+    if (!vmRunEnv.ExecuteContract(&luaContext, fuel, errMsg))
+        return state.DoS(100, ERRORMSG("txid=%s run script error: %s", GetHash().GetHex(), errMsg),
+                        EXECUTE_SCRIPT_FAIL, "run-script-error: " + errMsg);
 
     receipts.insert(receipts.end(), vmRunEnv.GetReceipts().begin(), vmRunEnv.GetReceipts().end());
 
@@ -557,26 +416,16 @@ bool CUniversalContractInvokeTx::ExecuteTx(CTxExecuteContext &context) {
 
     // If fees paid by WUSD, send the fuel to risk reserve pool.
     if (fee_symbol == SYMB::WUSD) {
-        uint64_t fuel = GetFuel(context.height, context.fuel_rate);
-        CAccount fcoinGenesisAccount;
-        cw.accountCache.GetFcoinGenesisAccount(fcoinGenesisAccount);
+        uint64_t fuel = GetFuelFee(cw, context.height, context.fuel_rate);
+        auto spFcoinAccount = GetAccount(context, SysCfg().GetFcoinGenesisRegId(), "fcoin");
+        if (!spFcoinAccount) return false;
 
-        if (!fcoinGenesisAccount.OperateBalance(SYMB::WUSD, BalanceOpType::ADD_FREE, fuel)) {
-            return state.DoS(100, ERRORMSG("CUniversalContractInvokeTx::ExecuteTx, operate balance failed"),
+        if (!spFcoinAccount->OperateBalance(SYMB::WUSD, BalanceOpType::ADD_FREE, fuel,
+                                                ReceiptType::CONTRACT_FUEL_TO_RISK_RESERVE, receipts)) {
+            return state.DoS(100, ERRORMSG("operate balance failed"),
                              UPDATE_ACCOUNT_FAIL, "operate-scoins-genesis-account-failed");
         }
-
-        if (!cw.accountCache.SetAccount(fcoinGenesisAccount.keyid, fcoinGenesisAccount))
-            return state.DoS(100, ERRORMSG("CUniversalContractInvokeTx::ExecuteTx, write fcoin genesis account info error!"),
-                             UPDATE_ACCOUNT_FAIL, "bad-write-accountdb");
-
-        CUserID fcoinGenesisUid(fcoinGenesisAccount.regid);
-        receipts.emplace_back(nullId, fcoinGenesisUid, SYMB::WUSD, fuel, ReceiptCode::CONTRACT_FUEL_TO_RISK_RESERVE);
     }
-
-    if (!cw.txReceiptCache.SetTxReceipts(GetHash(), receipts))
-        return state.DoS(100, ERRORMSG("CUniversalContractInvokeTx::ExecuteTx, set tx receipts failed!! txid=%s",
-                        GetHash().ToString()), REJECT_INVALID, "set-tx-receipt-failed");
 
     return true;
 }
@@ -589,11 +438,11 @@ string CUniversalContractInvokeTx::ToString(CAccountDBCache &accountCache) {
         coin_amount, fee_symbol, llFees, HexStr(arguments), valid_height);
 }
 
-Object CUniversalContractInvokeTx::ToJson(const CAccountDBCache &accountCache) const {
-    Object result = CBaseTx::ToJson(accountCache);
+Object CUniversalContractInvokeTx::ToJson(CCacheWrapper &cw) const {
+    Object result = CBaseTx::ToJson(cw);
 
     CKeyID desKeyId;
-    accountCache.GetKeyId(app_uid, desKeyId);
+    cw.accountCache.GetKeyId(app_uid, desKeyId);
     result.push_back(Pair("to_addr",        desKeyId.ToAddress()));
     result.push_back(Pair("to_uid",         app_uid.ToString()));
     result.push_back(Pair("coin_symbol",    coin_symbol));

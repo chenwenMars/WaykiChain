@@ -9,11 +9,10 @@
 #include "net.h"
 #include "netbase.h"
 #include "p2p/protocol.h"
+#include "p2p/node.h"
 #include "sync.h"
 #include "commons/util/util.h"
 #include "tx/blockrewardtx.h"
-
-#include "commons/json/json_spirit_value.h"
 
 #include <boost/foreach.hpp>
 #include <boost/assign/list_of.hpp>
@@ -22,6 +21,138 @@
 using namespace boost::assign;
 using namespace json_spirit;
 using namespace std;
+
+class CNodeMemoryStat {
+public:
+    uint32_t send_stream_size = 0;
+    uint32_t send_msg_count = 0;
+
+    uint32_t recv_get_data_count = 0;
+    uint32_t recv_msg_count = 0;
+
+    uint32_t addr_to_count = 0;
+    uint32_t addr_known_count = 0;
+
+    uint32_t hash_known_count = 0;
+    uint32_t inv_Known_count = 0;
+    uint32_t inv_to_send_count = 0;
+    uint32_t inv_force_to_send_count = 0;
+
+    uint32_t ask_for_count = 0;
+    uint32_t block_confirm_msg_known_count = 0;
+    uint32_t block_finality_msg_known_count = 0;
+
+    CNodeMemoryStat(CNode &node);
+};
+
+CNodeMemoryStat::CNodeMemoryStat(CNode &node) {
+    {
+        LOCK(node.cs_vSend);
+        send_stream_size = node.ssSend.size();
+        send_msg_count   = node.vSendMsg.size();
+    }
+    {
+        LOCK(node.cs_vRecvMsg);
+        recv_get_data_count = node.vRecvGetData.size(); // strCommand == "getdata 保存的inv
+        recv_msg_count      = node.vRecvMsg.size();
+    }
+
+    // static CCriticalSection cs_setBanned;
+    // static map<CNetAddr, int64_t> setBanned;
+
+    // flood relay
+    addr_to_count    = node.vAddrToSend.size();
+    addr_known_count = node.setAddrKnown.size();
+    hash_known_count = node.setKnown.size(); // alertHash
+
+    // inventory
+    {
+        LOCK(node.cs_inventory);
+        inv_Known_count         = node.setInventoryKnown.size();
+        inv_to_send_count       = node.vInventoryToSend.size();
+        inv_force_to_send_count = node.setForceToSend.size();
+    }
+
+    ask_for_count = node.mapAskFor.size();
+
+    {
+        LOCK(node.cs_blockConfirm);
+        block_confirm_msg_known_count = node.setBlockConfirmMsgKnown.size();
+    }
+
+    {
+        LOCK(node.cs_blockFinality);
+        block_finality_msg_known_count = node.setBlockFinalityMsgKnown.size();
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// class CNodeStats
+
+class CNodeStats {
+public:
+    NodeId nodeid;
+    uint64_t nServices;
+    int64_t nLastSend;
+    int64_t nLastRecv;
+    int64_t nTimeConnected;
+    string addrName;
+    int32_t nVersion;
+    string cleanSubVer;
+    bool fInbound;
+    int32_t nStartingHeight;
+    uint64_t nSendBytes;
+    uint64_t nRecvBytes;
+    bool fSyncNode;
+    double dPingTime;
+    double dPingWait;
+    string addrLocal;
+
+    // memory stat.
+    std::optional<CNodeMemoryStat> mem_stat;
+
+    CNodeStats(CNode &node, bool need_detail);
+};
+
+extern CNode* pnodeSync;
+
+CNodeStats::CNodeStats(CNode &node, bool need_detail) {
+    nodeid          = node.GetId();
+    nServices       = node.nServices;
+    nLastSend       = node.nLastSend;
+    nLastRecv       = node.nLastRecv;
+    nTimeConnected  = node.nTimeConnected;
+    addrName        = node.addrName;
+    nVersion        = node.nVersion;
+    cleanSubVer     = node.cleanSubVer;
+    fInbound        = node.fInbound;
+    nStartingHeight = node.nStartingHeight;
+    nSendBytes      = node.nSendBytes;
+    nRecvBytes      = node.nRecvBytes;
+    fSyncNode       = (&node == pnodeSync);
+
+    // It is common for nodes with good ping times to suddenly become lagged,
+    // due to a new block arriving or other large transfer.
+    // Merely reporting pingtime might fool the caller into thinking the node was still responsive,
+    // since pingtime does not update until the ping is complete, which might take a while.
+    // So, if a ping is taking an unusually long time in flight,
+    // the caller can immediately detect that this is happening.
+    int64_t nPingUsecWait = 0;
+    if ((0 != node.nPingNonceSent) && (0 != node.nPingUsecStart)) {
+        nPingUsecWait = GetTimeMicros() - node.nPingUsecStart;
+    }
+
+    // Raw ping time is in microseconds, but show it to user as whole seconds (Coin users should be well used to small
+    // numbers with many decimal places by now :)
+    dPingTime = (((double)node.nPingUsecTime) / 1e6);
+    dPingWait = (((double)nPingUsecWait) / 1e6);
+
+    // Leave string empty if addrLocal invalid (not filled in yet)
+    addrLocal = node.addrLocal.IsValid() ? node.addrLocal.ToString() : "";
+    if (need_detail) {
+        mem_stat.emplace(node);
+    }
+}
 
 Value getconnectioncount(const Array& params, bool fHelp) {
     if (fHelp || params.size() != 0)
@@ -57,23 +188,23 @@ Value ping(const Array& params, bool fHelp) {
     return Value::null;
 }
 
-static void CopyNodeStats(vector<CNodeStats>& vstats) {
+static void CopyNodeStats(vector<CNodeStats>& vstats, bool needDetail) {
     vstats.clear();
 
     LOCK(cs_vNodes);
     vstats.reserve(vNodes.size());
     for(auto pNode : vNodes) {
-        CNodeStats stats;
-        pNode->copyStats(stats);
-        vstats.push_back(stats);
+        vstats.push_back(CNodeStats(*pNode, needDetail));
     }
 }
 
 Value getpeerinfo(const Array& params, bool fHelp) {
-    if (fHelp || params.size() != 0)
+    if (fHelp || (params.size() != 0 && params.size() != 1))
         throw runtime_error(
             "getpeerinfo\n"
             "\nReturns data about each connected network node as a json array of objects.\n"
+            "\nArguments:\n"
+            "1. \"detail\"     (boolean, optional) show detail (false)\n"
             "\nbResult:\n"
             "[\n"
             "  {\n"
@@ -100,9 +231,10 @@ Value getpeerinfo(const Array& params, bool fHelp) {
             + HelpExampleCli("getpeerinfo", "")
             + HelpExampleRpc("getpeerinfo", "")
         );
+    bool needDetail = params.size() > 0 ? params[0].get_bool() : false;
 
     vector<CNodeStats> vstats;
-    CopyNodeStats(vstats);
+    CopyNodeStats(vstats, needDetail);
 
     Array ret;
 
@@ -139,6 +271,26 @@ Value getpeerinfo(const Array& params, bool fHelp) {
         }
 
         obj.push_back(Pair("syncnode",      stats.fSyncNode));
+
+        if (needDetail) {
+            Object detailObj;
+            auto &memDetail = *stats.mem_stat;
+            detailObj.push_back(Pair("send_stream_size", memDetail.send_stream_size));
+            detailObj.push_back(Pair("send_msg_count", memDetail.send_msg_count));
+            detailObj.push_back(Pair("recv_get_data_count", memDetail.recv_get_data_count));
+            detailObj.push_back(Pair("recv_msg_count", memDetail.recv_msg_count));
+            detailObj.push_back(Pair("addr_to_count", memDetail.addr_to_count));
+            detailObj.push_back(Pair("addr_known_count", memDetail.addr_known_count));
+            detailObj.push_back(Pair("hash_known_count", memDetail.hash_known_count));
+            detailObj.push_back(Pair("inv_Known_count", memDetail.inv_Known_count));
+            detailObj.push_back(Pair("inv_to_send_count", memDetail.inv_to_send_count));
+            detailObj.push_back(Pair("inv_force_to_send_count", memDetail.inv_force_to_send_count));
+            detailObj.push_back(Pair("ask_for_count", memDetail.ask_for_count));
+            detailObj.push_back(Pair("block_confirm_msg_known_count", memDetail.block_confirm_msg_known_count));
+            detailObj.push_back(Pair("block_finality_msg_known_count", memDetail.block_finality_msg_known_count));
+
+            obj.push_back(Pair("detail",      detailObj));
+        }
 
         ret.push_back(obj);
     }
@@ -354,7 +506,7 @@ Value getnetworkinfo(const Array& params, bool fHelp) {
     obj.push_back(Pair("timeoffset",        GetTimeOffset()));
     obj.push_back(Pair("connections",       (int32_t)vNodes.size()));
     obj.push_back(Pair("proxy",             (proxy.first.IsValid() ? proxy.first.ToStringIPPort() : string())));
-    obj.push_back(Pair("relayfee",          ValueFromAmount(MIN_RELAY_TX_FEE)));
+    obj.push_back(Pair("relayfee",          JsonValueFromAmount(MIN_RELAY_TX_FEE)));
     Array localAddresses;
     {
         LOCK(cs_mapLocalHost);
@@ -413,11 +565,16 @@ Value getchaininfo(const Array& params, bool fHelp) {
 
     for (int32_t i = 0; (i < count) && (pBlockIndex != nullptr); i++) {
         Object object;
+        CDiskBlockIndex diskBlockIndex;
+        if (!pCdMan->pBlockIndexDb->GetBlockIndex(pBlockIndex->GetBlockHash(), diskBlockIndex)) {
+            throw JSONRPCError(RPC_INVALID_PARAMS,
+                strprintf("the index of block=%s not found in db", pBlockIndex->GetIdString()));
+        }
         object.push_back(Pair("height",     pBlockIndex->height));
         object.push_back(Pair("time",       pBlockIndex->GetBlockTime()));
-        object.push_back(Pair("tx_count",   (int32_t)pBlockIndex->nTx));
-        object.push_back(Pair("fuel",       (int64_t)pBlockIndex->nFuel));
-        object.push_back(Pair("fuel_rate",  (int32_t)pBlockIndex->nFuelRate));
+        object.push_back(Pair("tx_count",   (int32_t)diskBlockIndex.nTx));
+        object.push_back(Pair("fuel_fee",   (int64_t)diskBlockIndex.nFuelFee));
+        object.push_back(Pair("fuel_rate",  (int32_t)diskBlockIndex.nFuelRate));
 
         block.SetNull();
         if (ReadBlockFromDisk(pBlockIndex, block)) {

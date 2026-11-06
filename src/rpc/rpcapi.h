@@ -13,14 +13,18 @@
 using namespace std;
 using namespace json_spirit;
 
-class CBaseTx;
+// class CBaseTx;
+
+/***************************** Universal *******************************************/
+extern Value submittx(const Array& params, bool fHelp);
+extern Value submitsetcodetx(const Array& params, bool fHelp);
 
 /***************************** Basic *******************************************/
 
 extern Value submitaccountregistertx(const Array& params, bool fHelp);
-extern Value submitnickidregistertx(const Array& params, bool fHelp);
-extern Value submitcontractdeploytx(const Array& params, bool fHelp);
-extern Value submitcontractcalltx(const Array& params, bool fHelp);
+extern Value submitaccountpermscleartx(const Array& params, bool fHelp);
+extern Value submitluacontractdeploytx(const Array& params, bool fHelp);
+extern Value submitluacontractcalltx(const Array& params, bool fHelp);
 extern Value submitdelegatevotetx(const Array& params, bool fHelp);
 extern Value submitucontractdeploytx(const Array& params, bool fHelp);
 extern Value submitucontractcalltx(const Array& params, bool fHelp);
@@ -39,7 +43,6 @@ extern Value getcontractaccountinfo(const Array& params, bool fHelp);
 extern Value saveblocktofile(const Array& params, bool fHelp);
 extern Value gethash(const Array& params, bool fHelp);
 extern Value validateaddr(const Array& params, bool fHelp);
-extern Object TxToJSON(CBaseTx *pTx);
 extern Value gettotalcoins(const Array& params, bool fHelp);
 
 extern Value getsignature(const Array& params, bool fHelp);
@@ -60,20 +63,14 @@ extern Value submitcdpredeemtx(const Array& params, bool fHelp);
 extern Value submitcdpliquidatetx(const Array& params, bool fHelp);
 
 extern Value getscoininfo(const Array& params, bool fHelp);
-extern Value getcdp(const Array& params, bool fHelp);
+extern Value getcdpinfo(const Array& params, bool fHelp);
 extern Value getusercdp(const Array& params, bool fHelp);
 
-extern Value listcdps(const Array& params, bool fHelp);
-extern Value listcdpstoliquidate(const Array& params, bool fHelp);
+// extern Value submitassetissuetx(const Array& params, bool fHelp);
+// extern Value submitassetupdatetx(const Array& params, bool fHelp);
 
-
-extern Value submitassetissuetx(const Array& params, bool fHelp);
-extern Value submitassetupdatetx(const Array& params, bool fHelp);
-
-extern Value getasset(const Array& params, bool fHelp);
-extern Value getassets(const Array& params, bool fHelp);
-
-extern Value getcdpcoinpairs(const Array& params, bool fHelp);
+extern Value getassetinfo(const Array& params, bool fHelp);
+extern Value listassets(const Array& params, bool fHelp);
 
 /******************************* DEX *******************************************/
 extern Value submitdexbuylimitordertx(const Array& params, bool fHelp);
@@ -85,153 +82,153 @@ extern Value gendexoperatorordertx(const Array& params, bool fHelp);
 
 extern Value submitdexcancelordertx(const Array& params, bool fHelp);
 extern Value submitdexoperatorregtx(const Array& params, bool fHelp);
-extern Value submitdexoperatorupdatetx(const Array& params, bool fHelp);
+extern Value submitdexopupdatetx(const Array& params, bool fHelp);
 extern Value submitdexsettletx(const Array& params, bool fHelp);
 
 extern Value getdexorder(const Array& params, bool fHelp);
-extern Value getdexorders(const Array& params, bool fHelp);
-extern Value getdexsysorders(const Array& params, bool fHelp);
+extern Value listdexorders(const Array& params, bool fHelp);
+extern Value listdexsysorders(const Array& params, bool fHelp);
 extern Value getdexoperator(const Array& params, bool fHelp);
 extern Value getdexoperatorbyowner(const Array& params, bool fHelp);
 
 extern Value getdexorderfee(const Array& params, bool fHelp);
 
-/*************************** Proposal ***********************************/
-extern Value submitparamgovernproposal(const Array& params, bool fHelp) ;
-
-extern Value submitcdpparamgovernproposal(const Array& params, bool fHelp) ;
-extern Value submitdexswitchproposal(const Array& params, bool fHelp) ;
-extern Value submitminerfeeproposal(const Array& params, bool fHelp) ;
-
-extern Value getcdpparam(const Array& params, bool fHelp) ;
-extern Value getproposal(const Array& params, bool fHelp) ;
-
-extern Value getminminerfee(const Array& params, bool fHelp) ;
-
-/******************************  WASM VM *********************************/
-extern Value vmexecutescript(const json_spirit::Array& params, bool fHelp);
-
-extern Value submitwasmcontractdeploytx(const Array& params, bool fHelp);
-extern Value submitwasmcontractcalltx(const Array& params, bool fHelp);
-extern Value gettablewasm(const Array& params, bool fHelp);
-
 /******************************  Misc ************************************/
+extern Value getconnectioncount(const Array& params, bool fHelp); // in rpcnet.cpp
+extern Value getpeerinfo(const Array& params, bool fHelp);
+extern Value ping(const Array& params, bool fHelp);
+extern Value addnode(const Array& params, bool fHelp);
+extern Value getaddednodeinfo(const Array& params, bool fHelp);
+extern Value getnettotals(const Array& params, bool fHelp);
+extern Value getchaininfo(const Array& params, bool fHelp);
 
+/******************************  wallet ************************************/
 extern void EnsureWalletIsUnlocked();
+extern Value dumpprivkey(const Array& params, bool fHelp); // in rpcdump.cpp
+extern Value importprivkey(const Array& params, bool fHelp);
+extern Value dumpwallet(const Array& params, bool fHelp);
+extern Value importwallet(const Array& params, bool fHelp);
+extern Value dropminermainkeys(const Array& params, bool fHelp);
+extern Value dropprivkey(const Array& params, bool fHelp);
 
-extern Value getconnectioncount(const json_spirit::Array& params, bool fHelp); // in rpcnet.cpp
-extern Value getpeerinfo(const json_spirit::Array& params, bool fHelp);
-extern Value ping(const json_spirit::Array& params, bool fHelp);
-extern Value addnode(const json_spirit::Array& params, bool fHelp);
-extern Value getaddednodeinfo(const json_spirit::Array& params, bool fHelp);
-extern Value getnettotals(const json_spirit::Array& params, bool fHelp);
-extern Value getchaininfo(const json_spirit::Array& params, bool fHelp);
+//extern Value getgenerate(const Array& params, bool fHelp); // in rpcmining.cpp
+extern Value setgenerate(const Array& params, bool fHelp);
+extern Value getmininginfo(const Array& params, bool fHelp);
+extern Value submitblock(const Array& params, bool fHelp);
+extern Value getminedblocks(const Array& params, bool fHelp);
+extern Value getminerbyblocktime(const Array& params, bool fHelp);
 
-extern Value dumpprivkey(const json_spirit::Array& params, bool fHelp); // in rpcdump.cpp
-extern Value importprivkey(const json_spirit::Array& params, bool fHelp);
-extern Value dumpwallet(const json_spirit::Array& params, bool fHelp);
-extern Value importwallet(const json_spirit::Array& params, bool fHelp);
-extern Value dropminermainkeys(const json_spirit::Array& params, bool fHelp);
-extern Value dropprivkey(const json_spirit::Array& params, bool fHelp);
+extern Value getnewaddr(const Array& params, bool fHelp); // in rpcwallet.cpp
+extern Value getaccount(const Array& params, bool fHelp);
+extern Value verifymessage(const Array& params, bool fHelp);
+extern Value getcoinunitinfo(const Array& params, bool fHelp);
+extern Value addmulsigaddr(const Array& params, bool fHelp);
+extern Value createmulsig(const Array& params, bool fHelp);
+extern Value getswapcoindetail(const Array& params, bool fHelp);
 
-//extern Value getgenerate(const json_spirit::Array& params, bool fHelp); // in rpcmining.cpp
-extern Value setgenerate(const json_spirit::Array& params, bool fHelp);
-extern Value gethashespersec(const json_spirit::Array& params, bool fHelp);
-extern Value getmininginfo(const json_spirit::Array& params, bool fHelp);
-extern Value submitblock(const json_spirit::Array& params, bool fHelp);
-extern Value getminedblocks(const json_spirit::Array& params, bool fHelp);
-extern Value getminerbyblocktime(const json_spirit::Array& params, bool fHelp);
+extern Value backupwallet(const Array& params, bool fHelp);
+extern Value walletpassphrase(const Array& params, bool fHelp);
+extern Value walletpassphrasechange(const Array& params, bool fHelp);
+extern Value walletlock(const Array& params, bool fHelp);
+extern Value encryptwallet(const Array& params, bool fHelp);
+extern Value getinfo(const Array& params, bool fHelp);
+extern Value getfinblockcount(const Array& params, bool fHelp);
+extern Value getwalletinfo(const Array& params, bool fHelp);
+extern Value getnetworkinfo(const Array& params, bool fHelp);
+extern Value getrewardinfo(const Array& params, bool fHelp);
 
-extern Value getnewaddr(const json_spirit::Array& params, bool fHelp); // in rpcwallet.cpp
-extern Value getaccount(const json_spirit::Array& params, bool fHelp);
-extern Value verifymessage(const json_spirit::Array& params, bool fHelp);
-extern Value getcoinunitinfo(const json_spirit::Array& params, bool fHelp);
-extern Value addmulsigaddr(const json_spirit::Array& params, bool fHelp);
-extern Value createmulsig(const json_spirit::Array& params, bool fHelp);
+extern Value signtxraw(const Array& params, bool fHelp);
+extern Value submittxraw(const Array& params, bool fHelp);
+extern Value droptxfrommempool(const Array& params, bool fHelp);
+extern Value decodetxraw(const Array& params, bool fHelp);
+extern Value submitsendtx(const Array& params, bool fHelp);
+extern Value signmessage(const Array& params, bool fHelp);
+extern Value getcontractassets(const  Array& params, bool fHelp);
 
-extern Value backupwallet(const json_spirit::Array& params, bool fHelp);
-extern Value walletpassphrase(const json_spirit::Array& params, bool fHelp);
-extern Value walletpassphrasechange(const json_spirit::Array& params, bool fHelp);
-extern Value walletlock(const json_spirit::Array& params, bool fHelp);
-extern Value encryptwallet(const json_spirit::Array& params, bool fHelp);
-extern Value getinfo(const json_spirit::Array& params, bool fHelp);
-extern Value getwalletinfo(const json_spirit::Array& params, bool fHelp);
-extern Value getnetworkinfo(const json_spirit::Array& params, bool fHelp);
+extern Value getfcoingenesistxinfo(const Array& params, bool fHelp);
+extern Value getblockcount(const Array& params, bool fHelp);
+extern Value getrawmempool(const Array& params, bool fHelp);
+extern Value getblock(const Array& params, bool fHelp);
+extern Value verifychain(const Array& params, bool fHelp);
+extern Value getcontractregid(const Array& params, bool fHelp);
+extern Value invalidateblock(const Array& params, bool fHelp);
+extern Value reconsiderblock(const Array& params, bool fHelp);
 
-extern Value signmessage(const json_spirit::Array& params, bool fHelp);
-extern Value getcontractassets(const json_spirit:: Array& params, bool fHelp);
-extern Value submitsendtx(const json_spirit::Array& params, bool fHelp);
-extern Value submitcreateutxotx(const json_spirit::Array& params, bool fHelp);
-extern Value submitutxospendtx(const Array& params, bool fHelp) ;
-extern Value genmulsigtx(const json_spirit::Array& params, bool fHelp);
+extern Value getblockfailures(const Array& params, bool fHelp);
+extern Value getblockundo(const Array& params, bool fHelp);
 
-extern Value submittxraw(const json_spirit::Array& params, bool fHelp);
+/******************************  Lua VM *********************************/
+extern Value luavm_executescript(const Array& params, bool fHelp);
+extern Value luavm_executecontract(const Array& params, bool fHelp);
 
-extern Value signtxraw(const json_spirit::Array& params, bool fHelp);
-extern Value decodetxraw(const json_spirit::Array& params, bool fHelp);
-extern Value decodemulsigscript(const json_spirit::Array& params, bool fHelp);
 
-extern Value getfcoingenesistxinfo(const json_spirit::Array& params, bool fHelp);
-extern Value getblockcount(const json_spirit::Array& params, bool fHelp);
-extern Value getdifficulty(const json_spirit::Array& params, bool fHelp);
-extern Value getrawmempool(const json_spirit::Array& params, bool fHelp);
-extern Value getblock(const json_spirit::Array& params, bool fHelp);
-extern Value verifychain(const json_spirit::Array& params, bool fHelp);
-extern Value getcontractregid(const json_spirit::Array& params, bool fHelp);
-extern Value invalidateblock(const json_spirit::Array& params, bool fHelp);
-extern Value reconsiderblock(const json_spirit::Array& params, bool fHelp);
-extern Value startcommontpstest(const json_spirit::Array& params, bool fHelp);
-extern Value startcontracttpstest(const json_spirit::Array& params, bool fHelp);
-extern Value getblockfailures(const json_spirit::Array& params, bool fHelp);
-extern Value getblockundo(const json_spirit::Array& params, bool fHelp);
+/******************************  WASM & General Module Access *********************************/
+extern Value wasm_gettable(const Array& params, bool fHelp);
+extern Value wasm_getrow(const Array& params, bool fHelp);
+extern Value wasm_json2bin(const Array& params, bool fHelp);
+extern Value wasm_bin2json(const Array& params, bool fHelp);
+extern Value wasm_getcode(const Array& params, bool fHelp);
+extern Value wasm_getabi(const Array& params, bool fHelp);
+extern Value wasm_gettxtrace(const Array& params, bool fHelp);
+extern Value wasm_abidefjson2bin(const Array& params, bool fHelp);
+extern Value wasm_getresult(const Array& params, bool fHelp);
 
-extern Value submitpricefeedtx(const json_spirit::Array& params, bool fHelp);
-extern Value submitcoinstaketx(const json_spirit::Array& params, bool fHelp);
+/******************************  UTXO *********************************/
+extern Value genutxomultiinputcondhash(const Array& params, bool fHelp);
+extern Value genutxomultisignaddr( const Array& params, bool fHelp);
+extern Value genutxomultisignature(const Array& params, bool fHelp);
+extern Value submitutxotransfertx(const Array& params, bool fHelp);
+extern Value submitpasswordprooftx(const Array& params, bool fHelp);
 
-extern Value submitdexbuylimitordertx(const json_spirit::Array& params, bool fHelp);
-extern Value submitdexselllimitordertx(const json_spirit::Array& params, bool fHelp);
-extern Value submitdexbuymarketordertx(const json_spirit::Array& params, bool fHelp);
-extern Value submitdexsellmarketordertx(const json_spirit::Array& params, bool fHelp);
-extern Value gendexoperatorordertx(const json_spirit::Array& params, bool fHelp);
 
-extern Value submitdexcancelordertx(const json_spirit::Array& params, bool fHelp);
-extern Value submitdexsettletx(const json_spirit::Array& params, bool fHelp);
-extern Value getdexorder(const json_spirit::Array& params, bool fHelp);
-extern Value getdexsysorders(const json_spirit::Array& params, bool fHelp);
-extern Value getdexorders(const json_spirit::Array& params, bool fHelp);
-extern Value submitdexoperatorregtx(const json_spirit::Array& params, bool fHelp);
-extern Value submitdexoperatorupdatetx(const json_spirit::Array& params, bool fHelp);
-extern Value getdexoperator(const json_spirit::Array& params, bool fHelp);
-extern Value getdexoperatorbyowner(const json_spirit::Array& params, bool fHelp);
-extern Value getdexorderfee(const json_spirit::Array& params, bool fHelp);
+/******************************  DeGov *********************************/
+extern Value submitaccountpermproposal(const Array& params , bool fHelp);
+extern Value submitassetpermproposal(const Array& params , bool fHelp);
+extern Value submitaxcinproposal(const Array& params, bool fHelp);
+extern Value submitaxcoutproposal(const Array& params, bool fHelp);
 
-extern Value submitcdpstaketx(const json_spirit::Array& params, bool fHelp);
-extern Value submitcdpredeemtx(const json_spirit::Array& params, bool fHelp);
-extern Value submitcdpliquidatetx(const json_spirit::Array& params, bool fHelp);
-extern Value getscoininfo(const json_spirit::Array& params, bool fHelp);
-extern Value getcdp(const json_spirit::Array& params, bool fHelp);
-extern Value getusercdp(const json_spirit::Array& params, bool fHelp);
+extern Value getsysparam(const Array& params, bool fHelp);
+extern Value listsysparams(const Array& params, bool fHelp);
+extern Value getdexbaseandquotecoins(const Array& params, bool fHelp);
+extern Value gettotalbpssize(const Array& params, bool fHelp);
+extern Value getfeedcoinpairs(const Array& params, bool fHelp);
+extern Value submitsendmultitx(const Array& params, bool fHelp);
+extern Value genunsignedtxraw(const Array& params, bool fHelp);
 
-extern Value submitassetissuetx(const json_spirit::Array& params, bool fHelp);
-extern Value submitassetupdatetx(const json_spirit::Array& params, bool fHelp);
+/*************************** Proposal ***********************************/
+extern Value submitparamgovernproposal(const Array& params, bool fHelp);
 
-extern Value getasset(const json_spirit::Array& params, bool fHelp);
-extern Value getassets(const json_spirit::Array& params, bool fHelp);
+extern Value submitcdpparamgovernproposal(const Array& params, bool fHelp);
+extern Value submitdexswitchproposal(const Array& params, bool fHelp);
+extern Value submitfeedcoinpairproposal(const Array& params, bool fHelp);
+extern Value submitminerfeeproposal(const Array& params, bool fHelp);
+extern Value submittotalbpssizeupdateproposal(const Array& params, bool fHelp);
+extern Value submitcointransferproposal( const Array& params, bool fHelp);
+extern Value submitgovernorupdateproposal(const Array& params, bool fHelp);
+extern Value submitproposalapprovaltx(const Array& params, bool fHelp);
+extern Value submitaxccoinproposal(const Array& params, bool fHelp);
+extern Value submitdiaissueproposal(const Array& params, bool fHelp);
+extern Value submitcancelorderproposal(const Array& params, bool fHelp);
 
-extern Value jsontobinwasm(const json_spirit::Array& params, bool fHelp);
-extern Value bintojsonwasm(const json_spirit::Array& params, bool fHelp);
-extern Value getcodewasm(const json_spirit::Array& params, bool fHelp);
-extern Value getabiwasm(const json_spirit::Array& params, bool fHelp);
-extern Value gettxtrace(const json_spirit::Array& params, bool fHelp);
-extern Value abidefjsontobinwasm(const json_spirit::Array& params, bool fHelp);
+extern Value getcdpparam(const Array& params, bool fHelp);
+extern Value getproposal(const Array& params, bool fHelp);
+extern Value getgovernors(const Array& params, bool fHelp);
+extern Value listmintxfees(const Array& params, bool fHelp);
 
-extern Value submitgovernerupdateproposal(const Array& params, bool fHelp) ;
-extern Value submitdexswitchproposal(const Array& params, bool fHelp) ;
-extern Value submitminerfeeproposal(const Array& params, bool fHelp) ;
+// debug only
+extern Value dumpdb(const Array& params, bool fHelp);
+extern Value getmemstat(const Array& params, bool fHelp);
 
-extern Value submitproposalapprovaltx(const Array& params, bool fHelp) ;
-extern Value getsysparam(const Array& params, bool fHelp) ;
-extern Value getproposal(const Array& params, bool fHelp) ;
-extern Value getminminerfee(const Array& params, bool fHelp) ;
+extern Value startcommontpstest(const Array& params, bool fHelp);
+extern Value startcontracttpstest(const Array& params, bool fHelp);
+extern Value startwasmtpstest(const Array& params, bool fHelp);
+
+
+#ifdef ENABLE_GPERFTOOLS
+extern Value startheapprofiler(const Array& params, bool fHelp);
+extern Value stopheapprofiler(const Array& params, bool fHelp);
+extern Value getheapprofiler(const Array& params, bool fHelp);
+extern Value dumpheapprofiler(const Array& params, bool fHelp);
+#endif//DENABLE_GPERFTOOLS
 
 #endif /* RPC_API_H_ */

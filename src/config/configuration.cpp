@@ -54,8 +54,6 @@ const vector<string> G_CONFIG_TABLE::GetDelegatePubKey(const NET_TYPE type) cons
     return delegatePubKey[type];
 }
 
-const uint256 G_CONFIG_TABLE::GetMerkleRootHash() const { return (uint256S((MerkleRootHash))); }
-
 string G_CONFIG_TABLE::GetDelegateSignature(const NET_TYPE type) const {
     assert(type >=0 && type < 3);
     return delegateSignature[type];
@@ -75,12 +73,12 @@ const vector<string> G_CONFIG_TABLE::GetStableCoinGenesisTxid(const NET_TYPE typ
     return stableCoinGenesisTxid[type];
 }
 
-uint32_t G_CONFIG_TABLE::GetFeatureForkHeight(const NET_TYPE type) const {
+uint32_t G_CONFIG_TABLE::GetVer2ForkHeight(const NET_TYPE type) const {
     assert(type >= 0 && type < 3);
-    return nFeatureForkHeight[type];
+    return nVer2ForkHeight[type];
 }
 
-uint32_t G_CONFIG_TABLE::GetStableCoinGenesisHeight(const NET_TYPE type) const {
+uint32_t G_CONFIG_TABLE::GetVer2GenesisHeight(const NET_TYPE type) const {
     assert(type >= 0 && type < 3);
     return nStableScoinGenesisHeight[type];
 }
@@ -88,6 +86,11 @@ uint32_t G_CONFIG_TABLE::GetStableCoinGenesisHeight(const NET_TYPE type) const {
 uint32_t G_CONFIG_TABLE::GetVer3ForkHeight(const NET_TYPE type) const {
     assert(type >= 0 && type < 3);
     return nVer3ForkHeight[type];
+}
+
+uint32_t G_CONFIG_TABLE::GetVer3_5ForkHeight(const NET_TYPE type) const {
+    assert(type >= 0 && type < 3);
+    return nVer3_5ForkHeight[type];
 }
 
 vector<uint32_t> G_CONFIG_TABLE::GetSeedNodeIP() const { return pnSeed; }
@@ -117,7 +120,7 @@ uint32_t G_CONFIG_TABLE::GetStartTimeInit(const NET_TYPE type) const {
     return StartTime[type];
 }
 
-uint32_t G_CONFIG_TABLE::GetTotalDelegateNum() const { return TotalDelegateNum; }
+uint8_t G_CONFIG_TABLE::GetTotalDelegateNum() const { return TotalDelegateNum; }
 
 uint32_t G_CONFIG_TABLE::GetMaxVoteCandidateNum() const { return MaxVoteCandidateNum; }
 
@@ -196,7 +199,6 @@ string G_CONFIG_TABLE::genesisBlockHash[3] = {
     "0xab8d8b1d11784098108df399b247a0b80049de26af1b9c775d550228351c768d"};  //regtest
 
 // Merkle Root Hash
-string G_CONFIG_TABLE::MerkleRootHash = "0x16b211137976871bb062e211f08b2f70a60fa8651b609823f298d1a3d3f3e05d";
 
 // Public key for initial fund coin owner
 string G_CONFIG_TABLE::initFcoinOwnerPubKey[3] = {
@@ -242,8 +244,9 @@ uint8_t G_CONFIG_TABLE::MessageMagicNumber[3][MESSAGE_START_SIZE] {
 
 // Address Prefix
 vector<uint8_t> G_CONFIG_TABLE::AddrPrefix[2][MAX_BASE58_TYPES] = {
-    { {73}, {51}, {153}, {0x4c, 0x1d, 0x3d, 0x5f}, {0x4c, 0x23, 0x3f, 0x4b}, {0} },
-    { {135}, {88}, {210}, {0x7d, 0x57, 0x3a, 0x2c}, {0x7d, 0x5c, 0x5A, 0x26}, {0} }
+    //pubkey,   script, seckey, ext_pub_key,                ext_sec_key
+    { {73},     {51},   {153},  {0x4c, 0x1d, 0x3d, 0x5f},   {0x4c, 0x23, 0x3f, 0x4b}, {0} }, //mainnet
+    { {135},    {88},   {210},  {0x7d, 0x57, 0x3a, 0x2c},   {0x7d, 0x5c, 0x5A, 0x26}, {0} } //testnet/regtest
 };
 
 // Default P2P Port
@@ -258,11 +261,8 @@ uint32_t G_CONFIG_TABLE::StartTime[3]   = { 1525404897 /*main*/, 1505401100 /*te
 // Initial Coin
 uint64_t G_CONFIG_TABLE::InitialCoin    = INITIAL_BASE_COIN_AMOUNT;  // 210 million
 
-// Default Miner Fee
-uint64_t G_CONFIG_TABLE::DefaultFee = 15;
-
 // Total Delegate Number
-uint32_t G_CONFIG_TABLE::TotalDelegateNum = 11;
+uint8_t G_CONFIG_TABLE::TotalDelegateNum = 11;
 // Max Number of Delegate Candidate to Vote for by a single account
 uint32_t G_CONFIG_TABLE::MaxVoteCandidateNum = 22;
 
@@ -273,13 +273,19 @@ uint32_t G_CONFIG_TABLE::nStableScoinGenesisHeight[3] {
     8};         // regtest
 
 // Block height to enable feature fork version
-uint32_t G_CONFIG_TABLE::nFeatureForkHeight[3] {
+uint32_t G_CONFIG_TABLE::nVer2ForkHeight[3] {
     4109588,    // mainnet: Wed Oct 16 2019 10:16:00 GMT+0800
     520,        // testnet
     10};        // regtest
 
 // Block height to enable feature fork version
 uint32_t G_CONFIG_TABLE::nVer3ForkHeight[3] {
-    8000000,    // mainnet:
-    2000000,    // testnet
+    11776688,   // mainnet, estimate block time: 2020-07-20 10:10:08
+    5756220,    // testnet, estimate block time: 2020-06-04 10:00:00
+    500};       // regtest
+
+// Block height to enable feature fork version
+uint32_t G_CONFIG_TABLE::nVer3_5ForkHeight[3] {
+    19866000,   // mainnet, estimate block time: 2021-05-18 09:57:30
+    13462000,   // testnet, estimate block time: 2021-04-30 09:51:30
     500};       // regtest

@@ -34,14 +34,11 @@ void init() {
 
 void closedb() {
 
-	if (pTestView != NULL) {
-		delete pTestView;
-		pTestView = NULL;
-	}
-	if (pTestDB != NULL) {
-		delete pTestDB;
-		pTestDB = NULL;
-	}
+	delete pTestView;
+	pTestView = NULL;
+	delete pTestDB;
+	pTestDB = NULL;
+
 	const boost::filesystem::path p=GetDataDir() / "blocks" / "testdb";
 	boost::filesystem::remove_all(p);
 
@@ -59,7 +56,7 @@ void testscriptdb() {
 	//write all data in caches to db
 	BOOST_CHECK(pTestView->Flush());
 	//test if the script id is exist in db
-	BOOST_CHECK(pTestView->HaveContract(regScriptId));
+	BOOST_CHECK(pTestView->HasContract(regScriptId));
 	vector<unsigned char> vScript;
 	//read script content from db by scriptId
 	BOOST_CHECK(pTestView->GetContractScript(regScriptId, vScript));
@@ -231,7 +228,7 @@ void testscriptdatadb() {
 	BOOST_CHECK(pTestView->Flush());
 	BOOST_CHECK(pTestView->SetContractData(regScriptId, vScriptKey1, vScriptData1, operlog));
 	//test if the script id is exist in db
-	BOOST_CHECK(pTestView->HaveContractData(regScriptId, vScriptKey));
+	BOOST_CHECK(pTestView->HasContractData(regScriptId, vScriptKey));
 	vScript.clear();
 
 

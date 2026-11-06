@@ -51,7 +51,9 @@ namespace wasm {
         const struct_def &get_struct( const type_name &type ) const;
         type_name get_action_type( type_name action ) const;
         type_name get_table_type( type_name action ) const;
-        void check_struct_in_recursion( const struct_def &s, shared_ptr <dag> &parent,
+        // void check_struct_in_recursion( const struct_def &s, shared_ptr <dag> &parent,
+        //                                 wasm::abi_traverse_context &ctx ) const;
+        void check_struct_in_recursion( const struct_def &s, wasm::dag* parent,
                                         wasm::abi_traverse_context &ctx ) const;
 
         json_spirit::Value
@@ -60,7 +62,8 @@ namespace wasm {
                                  microseconds max_serialization_time ) const;
         void variant_to_binary( const type_name &type, const json_spirit::Value &var, wasm::datastream<char *> &ds,
                                 microseconds max_serialization_time ) const;
-        
+        void variant_to_binary(const type_name &type, const json_spirit::Value &var,
+                               wasm::datastream<char *> &ds, wasm::abi_traverse_context &ctx) const;
         typedef std::function<json_spirit::Value(wasm::datastream<const char *> & , bool, bool)> unpack_function;
         typedef std::function<void( const json_spirit::Value &, wasm::datastream<char *> &, bool, bool )> pack_function;
         void add_specialized_unpack_pack( const string &name,
@@ -79,7 +82,8 @@ namespace wasm {
                 wasm::abi_serializer abis(def, max_serialization_time);
 
                 json_spirit::Value data_v;
-                json_spirit::read_string(params, data_v);
+                json_spirit::read_string_or_throw(params, data_v);
+                //json_spirit::read_string(params, data_v);
 
                 string action_type = abis.get_action_type(action);
                 if(action_type == string()){
@@ -94,8 +98,32 @@ namespace wasm {
 
         }
 
+        static std::vector<char>
+        pack( const std::vector<char> &abi, const string &action, const json_spirit::Value &params, microseconds max_serialization_time ) {
+
+           vector<char> data;
+           try {
+
+                wasm::abi_def def = wasm::unpack<wasm::abi_def>(abi);
+                wasm::abi_serializer abis(def, max_serialization_time);
+                string action_type = abis.get_action_type(action);
+                if(action_type == string()){
+                    action_type = action;
+                }
+                data = abis.variant_to_binary(action_type, params, max_serialization_time);
+
+            }
+            CHAIN_CAPTURE_AND_RETHROW("abi_serializer pack error in action '%s'", action)
+
+            return data;
+        }
+
+        static std::vector<char> pack_keys(const std::vector<char> &abi,
+                                           const json_spirit::Value &array,
+                                           microseconds max_serialization_time);
+
         static json_spirit::Value
-        unpack( const std::vector<char>  &abi, const string &action, const bytes &data, microseconds max_serialization_time ) {
+        unpack( const std::vector<char> &abi, const string &action, const bytes &data, microseconds max_serialization_time ) {
 
             json_spirit::Value data_v;
             try {
@@ -109,7 +137,7 @@ namespace wasm {
                 data_v = abis.binary_to_variant(action_type, data, max_serialization_time);
 
             }
-            CHAIN_CAPTURE_AND_RETHROW("abi_serializer unpack error in action '%s' params '%s'", action, ToHex(data))
+            CHAIN_CAPTURE_AND_RETHROW("abi_serializer unpack error in action '%s' params '%s'", action, to_hex(data))
 
             return data_v;
         }
@@ -131,11 +159,28 @@ namespace wasm {
 
                 data_v = abis.binary_to_variant(name, data, max_serialization_time);
             }
-            CHAIN_CAPTURE_AND_RETHROW("abi_serializer unpack error in table %s from '%s'", name, ToHex(data))
+            CHAIN_CAPTURE_AND_RETHROW("abi_serializer unpack error in table %s from '%s'", name, to_hex(data))
 
             return data_v;
         }
 
+        static json_spirit::Value
+        unpack_data( const std::vector<char> &abi, const type_name &name, const bytes &data, microseconds max_serialization_time ) {
+
+            CHAIN_ASSERT(name.size() > 0, wasm_chain::abi_parse_exception, "the name can not be empty");
+            json_spirit::Value data_v;
+            try {
+
+                wasm::abi_def def = wasm::unpack<wasm::abi_def>(abi);
+                wasm::abi_serializer abis(def, max_serialization_time);
+
+
+                data_v = abis.binary_to_variant(name, data, max_serialization_time);
+            }
+            CHAIN_CAPTURE_AND_RETHROW("abi_serializer unpack_data error! name=%s, data=%s", name, to_hex(data))
+
+            return data_v;
+        }
     private:
         map <type_name, type_name> typedefs;
         map <type_name, struct_def> structs;
@@ -182,14 +227,19 @@ namespace wasm {
         uint32_t recursion_depth;
     };
 
-    struct dag {
-        string name;
-        shared_ptr <dag> root;
-        vector <shared_ptr<dag>> parents;
-        vector <shared_ptr<dag>> childs;
+    class dag_manager;
 
-        bool has_circle( string n, wasm::abi_traverse_context &ctx ) {
-            if (name == n) return true;
+    struct dag {
+        dag_manager* manager = nullptr;
+        string     name;
+        vector<dag*> parents;
+        map<string, dag*> children;
+
+        dag() {}
+        dag(dag_manager* man, const string &n): manager(man), name(n) {}
+
+        bool has_circle( string n, wasm::abi_traverse_context& ctx ) {
+            if (name == n ) return true;
             for (auto p: parents) {
                 ctx.check_deadline();
                 if (p->has_circle(n, ctx)) return true;
@@ -199,66 +249,57 @@ namespace wasm {
 
         string to_string() {
             std::stringstream ss;
-            ss << "{name:" << name;
-            ss << " parents:";
-            for (auto p :parents) {
-                ss << p->name;
-                ss << " ";
+            ss << "{name: " << name;
+            ss << ", parents:[ ";
+            for (auto* p :parents) {
+                ss << p->name << ", ";
             }
 
-            ss << " childs:";
-            for (auto c :childs) {
-                ss << c->name;
-                ss << " ";
+            ss << "], children: [";
+            for (auto &child :children) {
+                ss << child.second->name << " ";
             }
-
-            ss << "}";
+            ss << "]}";
             return ss.str();
-        }
-
-        static tuple<bool, shared_ptr<dag>> add( shared_ptr <dag> t, string n, wasm::abi_traverse_context &ctx ) {
-
-            CHAIN_ASSERT( !t->has_circle(n, ctx),
-                          wasm_chain::abi_circular_def_exception,
-                          "Circular reference in struct %s", n);
-
-            for (auto child: t->childs) {
-                if (child->name == n)
-                    return tuple(false, child);
-            }
-
-            {
-                auto child = wasm::dag::find(t->root, n, ctx);
-                if (child != nullptr) {
-                    auto itr = std::find(child->parents.begin(), child->parents.end(), t);
-                    if (itr == child->parents.end())
-                        child->parents.push_back(t);
-
-                    return tuple(false, child);
-                }
-            }
-
-            {//new child
-                auto child = make_shared<dag>(
-                        wasm::dag{n, t->root, vector < shared_ptr < dag >> {t}, vector < shared_ptr < dag >> {}});
-                t->childs.push_back(child);
-            }
-
-            return tuple(true, t->childs.back());
-        }
-
-        static shared_ptr <dag> find( shared_ptr <dag> t, string n, wasm::abi_traverse_context &ctx ) {
-            if (t->name == n) return t;
-            for (auto child: t->childs) {
-                ctx.check_deadline();
-                auto d = wasm::dag::find(child, n, ctx);
-                if (d != nullptr)
-                    return d;
-            }
-            return nullptr;
         }
     };
 
 
+    struct dag_manager {
+        dag root;
+        // name -> dag
+        map<string, dag> dags;
+
+        dag_manager() : root(this, "root") {}
+
+
+        tuple<bool, dag*> add( wasm::dag* parent, string n, wasm::abi_traverse_context& ctx ) {
+
+            CHAIN_ASSERT( !parent->has_circle(n, ctx),
+                          wasm_chain::abi_circular_def_exception,
+                          "Circular reference in struct %s", n);
+
+            //n already add as parent's child
+            auto child_it = parent->children.find(n);
+            if (child_it != parent->children.end()) {
+                return {false, child_it->second};
+            }
+
+            bool is_new = true;
+            // add new dag to root
+            auto new_it = dags.find(n);
+            if (new_it == dags.end()) {
+                auto ret = dags.emplace(n, dag(this, n));
+                new_it = ret.first;
+                is_new = false;
+            }
+
+            auto new_dag = &new_it->second;
+
+             new_dag->parents.push_back(parent);
+             parent->children.emplace(n, new_dag);
+             return {is_new, new_dag};
+        }
+    };
 }  // wasm
 

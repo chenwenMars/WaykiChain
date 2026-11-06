@@ -22,11 +22,13 @@ using namespace json_spirit;
 
 class CTxMemCache {
 public:
+    typedef unordered_map<uint256, bool, CUint256Hasher> TxIdMap;
+public:
     CTxMemCache() : pBase(nullptr) {}
     CTxMemCache(CTxMemCache *pBaseIn) : pBase(pBaseIn) {}
 
 public:
-    bool HaveTx(const uint256 &txid);
+    bool HasTx(const uint256 &txid);
 
     bool AddBlockTx(const CBlock &block);
     bool RemoveBlockTx(const CBlock &block);
@@ -39,12 +41,10 @@ public:
     uint64_t GetSize();
 
 private:
-    bool HaveBlock(const uint256 &blockHash) const;
-    bool HaveBlock(const CBlock &block);
-    void BatchWrite(const UnorderedHashSet &mapBlockTxHashSetIn);
+    void BatchWrite(const TxIdMap &txidsIn);
 
 private:
-    UnorderedHashSet txids;
+    TxIdMap txids;
     CTxMemCache *pBase;
 };
 

@@ -12,12 +12,61 @@
 #include "commons/SafeInt3.hpp"
 #include "tx/contracttx.h"
 #include "tx/cointransfertx.h"
+#include "main.h"
 
 #define LUA_C_BUFFER_SIZE  500  //传递值，最大字节防止栈溢出
 
 ///////////////////////////////////////////////////////////////////////////////
 // local static functions
 
+#if 0 // print lua traceback
+static int countlevels (lua_State *L) {
+  lua_Debug ar;
+  int li = 1, le = 1;
+  /* find an upper bound */
+  while (lua_getstack(L, le, &ar)) { li = le; le *= 2; }
+  /* do a binary search */
+  while (li < le) {
+    int m = (li + le)/2;
+    if (lua_getstack(L, m, &ar)) li = m + 1;
+    else le = m;
+  }
+  return le - 1;
+}
+
+#define LEVELS1	120	/* size of the first part of the stack */
+#define LEVELS2	100	/* size of the second part of the stack */
+
+std::string lua_DebugToString(const lua_Debug &ar) {
+    return strprintf("%s:%d, %s %s()", ar.short_src, ar.currentline, ar.what, ar.name);
+}
+
+string luaL_traceback1 (lua_State *L, int level) {
+  lua_Debug ar;
+  int numlevels = countlevels(L);
+  int mark = (numlevels > LEVELS1 + LEVELS2) ? LEVELS1 : 0;
+
+  string str;
+  while (lua_getstack(L, level++, &ar)) {
+    if (level == mark) {  /* too many levels? */
+      str += "...\n";
+      level = numlevels - LEVELS2;  /* and skip to last ones */
+    }
+    else {
+      lua_getinfo(L, "Slnt", &ar);
+      str += strprintf("[%d] %s\n", level, lua_DebugToString(ar));
+    }
+  }
+  return str;
+}
+
+#define lua_traceback(L)                                                                           \
+    {                                                                                              \
+        string str;                                                                                \
+        str = luaL_traceback1(L, 0);                                                               \
+        LogPrint(BCLog::LUAVM, "stack traceback:\n%s\n", str);                                     \
+    }
+#endif // print lua traceback
 /*
  *  //3.往函数私有栈里存运算后的结果*/
 static inline int32_t RetRstToLua(lua_State *L, const vector<uint8_t> &resultData, bool needToTruncate = true) {
@@ -82,8 +131,8 @@ static inline int32_t RetRstBooleanToLua(lua_State *L, bool flag) {
     }
 }
 
-static inline int32_t RetFalse(const string reason) {
-    LogPrint(BCLog::LUAVM, "%s\n", reason.c_str());
+static inline int32_t RetFalse(const string &reason) {
+    LogPrint(BCLog::LUAVM, "Error: %s\n", reason);
     return 0;
 }
 
@@ -108,10 +157,16 @@ static CLuaVMRunEnv* GetVmRunEnvByContext(lua_State *L) {
     return (CLuaVMRunEnv*)pState->pContext;
 }
 
-static bool GetKeyId(const CAccountDBCache &accountView, vector<uint8_t> &ret, CKeyID &keyId) {
+static bool GetKeyId(CLuaVMRunEnv *pVmRunEnv, vector<uint8_t> &ret, CKeyID &keyId) {
+    // LogPrint(BCLog::LUAVM, "ret.size=%d", ret.size());
+
     if (ret.size() == 6) {
-        CRegID reg(ret);
-        keyId = reg.GetKeyId(accountView);
+        CRegID regid(ret);
+        if (regid.IsEmpty()) return false;
+
+        auto spAcct = pVmRunEnv->GetAccount(regid);
+        if (!spAcct) return false;
+        keyId = spAcct->keyid;
     } else if (ret.size() == 34) {
         string addr(ret.begin(), ret.end());
         keyId = CKeyID(addr);
@@ -1058,21 +1113,21 @@ int32_t ExGetAccountPublickeyFunc(lua_State *L) {
 
     LUA_BurnFuncCall(L, FUEL_CALL_GetAccountPublickey, BURN_VER_R2);
     CKeyID addrKeyId;
-    if (!GetKeyId(*(pVmRunEnv->GetCatchView()), *retdata.at(0).get(), addrKeyId)) {
+    if (!GetKeyId(pVmRunEnv, *retdata.at(0).get(), addrKeyId)) {
         return RetFalse("ExGetAccountPublickeyFunc para err2");
     }
-    CUserID userid(addrKeyId);
-    CAccount account;
-    if (!pVmRunEnv->GetCatchView()->GetAccount(userid, account)) {
-        return RetFalse("ExGetAccountPublickeyFunc para err3");
+    CUserID uid(addrKeyId);
+    shared_ptr<CAccount> spAccount = pVmRunEnv->GetAccount(uid);
+    if (!spAccount) {
+        LogPrint(BCLog::LUAVM, "[ERROR] The account not exist! address=%s\n", uid.ToDebugString());
+        return 0;
+    }
+    if (!spAccount->owner_pubkey.IsFullyValid()) {
+        return RetFalse("ExGetAccountPublickeyFunc pubKey invalid");
     }
     CDataStream tep(SER_DISK, CLIENT_VERSION);
     vector<char> te;
-    tep << account.owner_pubkey;
-    // assert(account.owner_pubkey.IsFullyValid());
-    if (false == account.owner_pubkey.IsFullyValid()) {
-        return RetFalse("ExGetAccountPublickeyFunc pubKey invalid");
-    }
+    tep << spAccount->owner_pubkey;
     tep >> te;
     vector<uint8_t> tep1(te.begin(), te.end());
     return RetRstToLua(L, tep1);
@@ -1097,22 +1152,24 @@ int32_t ExQueryAccountBalanceFunc(lua_State *L) {
 
     LUA_BurnFuncCall(L, FUEL_ACCOUNT_GET_VALUE, BURN_VER_R2);
     CKeyID addrKeyId;
-    if (!GetKeyId(*(pVmRunEnv->GetCatchView()), *retdata.at(0).get(), addrKeyId)) {
+    if (!GetKeyId(pVmRunEnv, *retdata.at(0).get(), addrKeyId)) {
         return RetFalse("ExQueryAccountBalanceFunc para err2");
     }
 
-    CUserID userid(addrKeyId);
-    CAccount account;
+    CUserID uid(addrKeyId);
     int32_t len = 0;
-    if (!pVmRunEnv->GetCatchView()->GetAccount(userid, account)) {
-        len = 0;
-    } else {
-        uint64_t nbalance = account.GetToken(SYMB::WICC).free_amount;
-        CDataStream tep(SER_DISK, CLIENT_VERSION);
-        tep << nbalance;
-        vector<uint8_t> TMP(tep.begin(), tep.end());
-        len = RetRstToLua(L, TMP);
+    shared_ptr<CAccount> spAccount = pVmRunEnv->GetAccount(uid);
+    if (!spAccount) {
+        LogPrint(BCLog::LUAVM, "[ERROR] The account not exist! address=%s\n", uid.ToDebugString());
+        return 0;
     }
+
+    uint64_t nbalance = spAccount->GetToken(SYMB::WICC).free_amount;
+    CDataStream tep(SER_DISK, CLIENT_VERSION);
+    tep << nbalance;
+    vector<uint8_t> TMP(tep.begin(), tep.end());
+    len = RetRstToLua(L, TMP);
+
     return len;
 }
 
@@ -1211,7 +1268,7 @@ int32_t ExGetCurRunEnvHeightFunc(lua_State *L) {
         /*
         if(lua_checkstack(L,sizeof(lua_Number))){
              lua_pushnumber(L,(lua_Number)height);
-             return 1 ;
+             return 1;
         }else{
             LogPrint(BCLog::LUAVM,"%s\n", "ExGetCurRunEnvHeightFunc stack overflow");
         }
@@ -1309,6 +1366,10 @@ int32_t ExWriteDataDBFunc(lua_State *L) {
     } else {
         lua_BurnStoreSet(L, key.size(), oldValue.size(), value.size(), BURN_VER_R2);
     }
+    #ifdef TRACE_LUAVM_CONTRACT_DATA
+        LogPrint(BCLog::LUAVM, "WriteData(), contract_regid=%s, key=%s, key_hex=%s, new_value=%s, new_value_hex=%s\n",
+            contractRegId.ToString(), key, HexStr(key), value, HexStr(value));
+    #endif//TRACE_LUAVM_CONTRACT_DATA
     return RetRstBooleanToLua(L,flag);
 }
 
@@ -1346,7 +1407,10 @@ int32_t ExDeleteDataDBFunc(lua_State *L) {
     } else {
         lua_BurnStoreSet(L, key.size(), oldValue.size(), 0, BURN_VER_R2);
     }
-
+    #ifdef TRACE_LUAVM_CONTRACT_DATA
+    LogPrint(BCLog::LUAVM, "DeleteData(), contract_regid=%s, key=%s, key_hex=%s, old_value=%s, old_value_hex=%s\n",
+        contractRegId.ToString(), key, HexStr(key), oldValue, HexStr(oldValue));
+    #endif//TRACE_LUAVM_CONTRACT_DATA
     return RetRstBooleanToLua(L, flag);
 }
 
@@ -1381,6 +1445,10 @@ int32_t ExReadDataDBFunc(lua_State *L) {
         lua_BurnStoreGet(L, key.size(), value.size(), BURN_VER_R2);
         len = RetRstToLua(L, vector<uint8_t>(value.begin(), value.end()));
     }
+    #ifdef TRACE_LUAVM_CONTRACT_DATA
+        LogPrint(BCLog::LUAVM, "ReadData(), contract_regid=%s, key=%s, key_hex=%s, value=%s, value_hex=%s\n",
+            scriptRegId.ToString(), key, HexStr(key), value, HexStr(value));
+    #endif//TRACE_LUAVM_CONTRACT_DATA
     return len;
 }
 
@@ -1433,6 +1501,10 @@ int32_t ExModifyDataDBFunc(lua_State *L) {
     } else {
         lua_BurnStoreUnchanged(L, key.size(), newValue.size(), BURN_VER_R2);
     }
+    #ifdef TRACE_LUAVM_CONTRACT_DATA
+        LogPrint(BCLog::LUAVM, "ModifyData(), contract_regid=%s, key=%s, key_hex=%s, new_value=%s, new_value_hex=%s\n",
+            contractRegId.ToString(), key, HexStr(key), newValue, HexStr(newValue));
+    #endif//TRACE_LUAVM_CONTRACT_DATA
 
     return RetRstBooleanToLua(L,flag);
 }
@@ -1446,7 +1518,7 @@ static bool GetDataTableWriteOutput(lua_State *L, CVmOperate &operate) {
 
     double doubleValue = 0;
     uint16_t len = 0;
-    vector<uint8_t> vBuf ;
+    vector<uint8_t> vBuf;
     if (!(getNumberInTable(L,(char *)"addrType",doubleValue))) {
         LogPrint(BCLog::LUAVM, "WriteOutput(), get addrType failed\n");
         return false;
@@ -1532,7 +1604,7 @@ static bool GetDataTableGetContractData(lua_State *L, vector<std::shared_ptr<std
         return false;
     }
 
-    vector<uint8_t> vBuf ;
+    vector<uint8_t> vBuf;
     //取脚本id
     if (!getArrayInTable(L,(char *)"id",6,vBuf)) {
         LogPrint(BCLog::LUAVM,"idTbl not table\n");
@@ -1581,13 +1653,17 @@ int32_t ExGetContractDataFunc(lua_State *L) {
     string value;
 
     int32_t len = 0;
-    if (!scriptDB->GetContractData(contractRegId, key, value)) {
+    if (contractRegId.IsEmpty() || !scriptDB->GetContractData(contractRegId, key, value)) {
         len = 0;
         lua_BurnStoreUnchanged(L, key.size(), 0, BURN_VER_R2);
     } else {
         lua_BurnStoreGet(L, key.size(), value.size(), BURN_VER_R2);
         len = RetRstToLua(L, vector<uint8_t>(value.begin(), value.end()));
     }
+    #ifdef TRACE_LUAVM_CONTRACT_DATA
+        LogPrint(BCLog::LUAVM, "GetContractData(), contract_regid=%s, key=%s, key_hex=%s, value=%s, value_hex=%s\n",
+            contractRegId.ToString(), key, HexStr(key), value, HexStr(value));
+    #endif//TRACE_LUAVM_CONTRACT_DATA
     /*
      * 每个函数里的Lua栈是私有的,当把返回值压入Lua栈以后，该栈会自动被清空*/
     return len;
@@ -1623,7 +1699,8 @@ int32_t ExGetCurTxAccountFunc(lua_State *L) {
     LUA_BurnFuncCall(L, FUEL_CALL_GetCurTxAccount, BURN_VER_R2);
    //1.从lua取参数
    //2.调用C++库函数 执行运算
-    UnsignedCharArray vUserId =pVmRunEnv->GetTxUserRegid().GetRegIdRaw();
+    // LogPrint(BCLog::LUAVM, "DEBUG:: pVmRunEnv->GetTxAccountRegId() = %s \n\n", pVmRunEnv->GetTxAccountRegId().ToString());
+    UnsignedCharArray vUserId = pVmRunEnv->GetTxAccountRegId().GetRegIdRaw();
 
    //3.往函数私有栈里存运算后的结果
     int32_t len = RetRstToLua(L,vUserId);
@@ -1658,7 +1735,6 @@ int32_t ExGetUserAppAccValueFunc(lua_State *L) {
     double doubleValue = 0;
     uint32_t idlen = 0;
     vector<uint8_t> accountId;
-    memset(&accountId, 0, sizeof(accountId));
     if (!(getNumberInTable(L, "idLen", doubleValue))) {
         LogPrint(BCLog::LUAVM, "get idlen failed\n");
         return 0;
@@ -1680,7 +1756,7 @@ int32_t ExGetUserAppAccValueFunc(lua_State *L) {
         return RetFalse("pVmRunEnv is nullptr");
 
     shared_ptr<CAppUserAccount> appAccount;
-    uint64_t valueData = 0 ;
+    uint64_t valueData = 0;
     int32_t len = 0;
     LUA_BurnAccount(L, FUEL_ACCOUNT_GET_VALUE, BURN_VER_R2);
     if (pVmRunEnv->GetAppUserAccount(accountId, appAccount)) {
@@ -1700,9 +1776,8 @@ static bool GetDataTableOutAppOperate(lua_State *L, vector<std::shared_ptr<std::
         return false;
     }
     double doubleValue = 0;
-    vector<uint8_t> vBuf ;
+    vector<uint8_t> vBuf;
     CAppFundOperate temp;
-    memset(&temp,0,sizeof(temp));
     if (!(getNumberInTable(L,(char *)"operatorType",doubleValue))) {
         LogPrint(BCLog::LUAVM, "opType get fail\n");
         return false;
@@ -1792,7 +1867,7 @@ int32_t ExGetUserAppAccFundWithTagFunc(lua_State *L) {
             return RetFalse("GetUserAppAccFundWithTag GetAppCFund fail");
 
         CDataStream tep(SER_DISK, CLIENT_VERSION);
-        tep << fund.GetValue() ;
+        tep << fund.GetValue();
         vector<uint8_t> TMP(tep.begin(),tep.end());
         len = RetRstToLua(L,TMP);
     }
@@ -1807,9 +1882,8 @@ static bool GetDataTableAssetOperate(lua_State *L, int32_t index, vector<std::sh
     }
 
     double doubleValue = 0;
-    vector<uint8_t> vBuf ;
+    vector<uint8_t> vBuf;
     CAssetOperate temp;
-    memset(&temp,0,sizeof(temp));
 
     if (!getArrayInTable(L,(char *)"toAddrTbl",34,vBuf)) {
         LogPrint(BCLog::LUAVM,"toAddrTbl not table\n");
@@ -1915,14 +1989,17 @@ int32_t ExGetBase58AddrFunc(lua_State *L) {
         LogPrint(BCLog::LUAVM, "==============%02X\n", recvKey[i]);
 
     vector<uint8_t> tmp;
-    for(int32_t i = recvKey.size() - 1; i >=0 ; i--)
+    for(int32_t i = recvKey.size() - 1; i >=0; i--)
         tmp.push_back(recvKey[i]);
 */
 
     LUA_BurnFuncCall(L, FUEL_CALL_GetBase58Addr, BURN_VER_R2);
     CKeyID addrKeyId;
-    if (!GetKeyId(*pVmRunEnv->GetCatchView(), *retdata.at(0).get(), addrKeyId))
-        return RetFalse("ExGetBase58AddrFunc para err1");
+    auto pAddr = retdata.at(0).get();
+    if (!GetKeyId(pVmRunEnv, *pAddr, addrKeyId)) {
+        string sAddr(pAddr->begin(), pAddr->end());
+        return RetFalse(strprintf("ExGetBase58AddrFunc para (%s)", sAddr));
+    }
 
     string addr = addrKeyId.ToAddress();
 
@@ -1935,7 +2012,7 @@ int32_t ExTransferContractAsset(lua_State *L) {
     vector<std::shared_ptr<vector<uint8_t>>> retdata;
 
     if (!GetArray(L,retdata) ||retdata.size() != 1 || retdata.at(0).get()->size() != 34)
-        return RetFalse(string(__FUNCTION__)+"para  err !");
+        return RetFalse(string(__FUNCTION__) + "para err !");
 
     CLuaVMRunEnv* pVmRunEnv = GetVmRunEnv(L);
     if (nullptr == pVmRunEnv)
@@ -1945,8 +2022,8 @@ int32_t ExTransferContractAsset(lua_State *L) {
     vector<uint8_t> recvKey;
     CRegID script = pVmRunEnv->GetContractRegID();
 
-    CRegID sendRegID =pVmRunEnv->GetTxUserRegid();
-    CKeyID SendKeyID = sendRegID.GetKeyId(*pVmRunEnv->GetCatchView());
+    CRegID sendRegID =pVmRunEnv->GetTxAccountRegId();
+    CKeyID SendKeyID = sendRegID.GetKeyId(*pVmRunEnv->GetAccountCache());
     string addr = SendKeyID.ToAddress();
     sendKey.assign(addr.c_str(),addr.c_str()+addr.length());
 
@@ -1959,7 +2036,7 @@ int32_t ExTransferContractAsset(lua_State *L) {
     }
 
     CKeyID RecvKeyID;
-    bool bValid = GetKeyId(*pVmRunEnv->GetCatchView(), recvKey, RecvKeyID);
+    bool bValid = GetKeyId(pVmRunEnv, recvKey, RecvKeyID);
     if (!bValid) {
         LUA_BurnAccount(L, FUEL_ACCOUNT_UNCHANGED, BURN_VER_R2);
         LogPrint(BCLog::LUAVM, "%s\n", "recv addr is not valid !");
@@ -1981,7 +2058,6 @@ int32_t ExTransferContractAsset(lua_State *L) {
     int32_t count = 0;
     int32_t i = 0;
     CAppFundOperate op;
-    memset(&op, 0, sizeof(op));
 
     if (nMoney > 0) {
         op.mMoney = nMoney;
@@ -2053,10 +2129,9 @@ int32_t ExTransferSomeAsset(lua_State *L) {
 
     vector<uint8_t> sendKey;
     vector<uint8_t> recvKey;
-    CRegID script = pVmRunEnv->GetContractRegID();
 
-    CRegID sendRegID = pVmRunEnv->GetTxUserRegid();
-    CKeyID SendKeyID = sendRegID.GetKeyId(*pVmRunEnv->GetCatchView());
+    CRegID sendRegID = pVmRunEnv->GetTxAccountRegId();
+    CKeyID SendKeyID = sendRegID.GetKeyId(*pVmRunEnv->GetAccountCache());
     string addr      = SendKeyID.ToAddress();
     sendKey.assign(addr.c_str(), addr.c_str() + addr.length());
 
@@ -2069,7 +2144,7 @@ int32_t ExTransferSomeAsset(lua_State *L) {
     }
 
     CKeyID RecvKeyID;
-    bool bValid = GetKeyId(*pVmRunEnv->GetCatchView(), recvKey, RecvKeyID);
+    bool bValid = GetKeyId(pVmRunEnv, recvKey, RecvKeyID);
     if (!bValid) {
         LogPrint(BCLog::LUAVM, "%s\n", "recv addr is not valid !");
         return RetFalse(string(__FUNCTION__)+"recv addr is not valid !");
@@ -2085,7 +2160,6 @@ int32_t ExTransferSomeAsset(lua_State *L) {
 
     int32_t i = 0;
     CAppFundOperate op;
-    memset(&op, 0, sizeof(op));
     vector<uint8_t> vtag = assetOp.GetFundTagV();
     op.fundTagLen = vtag.size();
 
@@ -2104,7 +2178,7 @@ int32_t ExTransferSomeAsset(lua_State *L) {
     op.opType = (height > 0) ? SUB_TAG_OP : SUB_FREE_OP;
     pVmRunEnv->InsertOutAPPOperte(sendKey, op);
 
-    op.opType = (height > 0) ? ADD_TAG_OP : ADD_FREE_OP ;
+    op.opType = (height > 0) ? ADD_TAG_OP : ADD_FREE_OP;
     op.appuserIDlen = recvKey.size();
 
     for (i = 0; i < op.appuserIDlen; i++) {
@@ -2202,40 +2276,39 @@ int32_t ExLuaPrint(lua_State *L) {
 
 static bool ParseAccountAssetTransfer(lua_State *L, CLuaVMRunEnv &vmRunEnv, AssetTransfer &transfer) {
     if (!lua_istable(L,-1)) {
-        LogPrint(BCLog::LUAVM,"ParseAccountAssetTransfer(), transfer param must be table\n");
+        LogPrint(BCLog::LUAVM,"transfer param must be table\n");
         return false;
     }
 
     if (!(GetBoolInTable(L, "isContractAccount", transfer.isContractAccount))) {
-        LogPrint(BCLog::LUAVM, "ParseAccountAssetTransfer(), get isContractAccount failed\n");
+        LogPrint(BCLog::LUAVM, "get isContractAccount failed\n");
         return false;
     }
 
     AccountType uidType;
     if (!(ParseUidTypeInTable(L, "toAddressType", uidType))) {
-        LogPrint(BCLog::LUAVM, "ParseAccountAssetTransfer(), get toAddressType failed\n");
+        LogPrint(BCLog::LUAVM, "get toAddressType failed\n");
         return false;
     }
 
     if (!ParseUidInTable(L, "toAddress", uidType, transfer.toUid)) {
-        LogPrint(BCLog::LUAVM,"ParseAccountAssetTransfer(), get toAddress failed\n");
+        LogPrint(BCLog::LUAVM,"get toAddress failed\n");
         return false;
     }
 
     if (!(getStringInTable(L, "tokenType", transfer.tokenType))) {
-        LogPrint(BCLog::LUAVM, "ParseAccountAssetTransfer(), get tokenType failed\n");
+        LogPrint(BCLog::LUAVM, "get tokenType failed\n");
         return false;
     }
 
-    auto pErr = vmRunEnv.GetCw()->assetCache.CheckTransferCoinSymbol(transfer.tokenType);
-    if (pErr) {
-        LogPrint(BCLog::LUAVM, "ParseAccountAssetTransfer(), Invalid tokenType=%s! %s \n", transfer.tokenType, *pErr);
+    if (!vmRunEnv.GetCw()->assetCache.CheckAsset(transfer.tokenType)) {
+        LogPrint(BCLog::LUAVM, "Invalid tokenType=%s!\n", transfer.tokenType);
         return false;
     }
 
     vector<uint8_t> amountVector;
     if (!getArrayInTable(L, "tokenAmount", sizeof(uint64_t), amountVector)) {
-        LogPrint(BCLog::LUAVM, "ParseAccountAssetTransfer(), get tokenAmount failed\n");
+        LogPrint(BCLog::LUAVM, "get tokenAmount failed\n");
         return false;
     };
     assert(amountVector.size() == sizeof(uint64_t));
@@ -2245,7 +2318,7 @@ static bool ParseAccountAssetTransfer(lua_State *L, CLuaVMRunEnv &vmRunEnv, Asse
     ssAmount >> amount;
 
     if (amount == 0 || !CheckBaseCoinRange(amount) ) {
-        LogPrint(BCLog::LUAVM, "ParseAccountAssetTransfer(), tokenAmount=%lld is 0 or out of range\n", amount);
+        LogPrint(BCLog::LUAVM, "tokenAmount=%lld is 0 or out of range\n", amount);
         return false;
     }
     transfer.tokenAmount = amount;
@@ -2350,7 +2423,7 @@ int32_t ExGetCurTxInputAssetFunc(lua_State *L) {
     LUA_BurnFuncCall(L, FUEL_CALL_GetCurTxInputAsset, BURN_VER_R2);
 
     lua_createtable (L, 0, 2); // create table object with 2 field
-    // set asset.symbol
+    // set asset.asset_symbol
     lua_pushstring(L, pVmRunEnv->GetContext().transfer_symbol.c_str());
     lua_setfield(L, -2, "symbol");
 
@@ -2380,47 +2453,46 @@ int32_t ExGetCurTxInputAssetFunc(lua_State *L) {
 int32_t ExGetAccountAssetFunc(lua_State *L) {
     CLuaVMRunEnv* pVmRunEnv = GetVmRunEnv(L);
     if (nullptr == pVmRunEnv) {
-        LogPrint(BCLog::LUAVM,"[ERROR]%s(), pVmRunEnv is nullptr", __FUNCTION__);
+        LogPrint(BCLog::LUAVM,"[ERROR] pVmRunEnv is nullptr");
         return 0;
     }
 
     if (!lua_istable(L,-1)) {
-        LogPrint(BCLog::LUAVM,"[ERROR]%s(), input param must be a table\n", __FUNCTION__);
+        LogPrint(BCLog::LUAVM,"[ERROR] input param must be a table\n");
         return 0;
     }
 
     AccountType uidType;
     if (!(ParseUidTypeInTable(L, "addressType", uidType))) {
-        LogPrint(BCLog::LUAVM, "[ERROR]%s(), get addressType failed\n", __FUNCTION__);
+        LogPrint(BCLog::LUAVM, "[ERROR] get addressType failed\n");
         return 0;
     }
 
     CUserID uid;
     if (!ParseUidInTable(L, "address", uidType, uid)) {
-        LogPrint(BCLog::LUAVM,"[ERROR]%s(), get address failed\n", __FUNCTION__);
+        LogPrint(BCLog::LUAVM,"[ERROR] get address failed\n");
         return 0;
     }
 
     TokenSymbol tokenType;
     if (!(getStringInTable(L, "tokenType", tokenType))) {
-        LogPrint(BCLog::LUAVM, "[ERROR]%s(), get tokenType failed\n", __FUNCTION__);
+        LogPrint(BCLog::LUAVM, "[ERROR] get tokenType failed\n");
         return 0;
     }
-    auto pErr = pVmRunEnv->GetCw()->assetCache.CheckTransferCoinSymbol(tokenType);
-    if (pErr) {
-        LogPrint(BCLog::LUAVM, "[ERROR]%s(), Invalid tokenType=%s! %s \n", __FUNCTION__, tokenType, *pErr);
+    if (!pVmRunEnv->GetCw()->assetCache.CheckAsset(tokenType)) {
+        LogPrint(BCLog::LUAVM, "[ERROR] Invalid tokenType=%s!\n", tokenType);
         return 0;
     }
     LUA_BurnAccount(L, FUEL_ACCOUNT_GET_VALUE, BURN_VER_R2);
 
-    auto pAccount = make_shared<CAccount>();
-    if (!pVmRunEnv->GetCw()->accountCache.GetAccount(uid, *pAccount)) {
-        LogPrint(BCLog::LUAVM, "[ERROR]%s(), The account not exist! address=%s\n", __FUNCTION__, uid.ToDebugString());
+    shared_ptr<CAccount> spAccount = pVmRunEnv->GetAccount(uid);
+    if (!spAccount) {
+        LogPrint(BCLog::LUAVM, "[ERROR] The account not exist! address=%s\n", uid.ToDebugString());
         return 0;
     }
 
     uint64_t value;
-    if (!pAccount->GetBalance(tokenType, FREE_VALUE, value)) {
+    if (!spAccount->GetBalance(tokenType, FREE_VALUE, value)) {
         value = 0;
     }
 
@@ -2430,7 +2502,7 @@ int32_t ExGetAccountAssetFunc(lua_State *L) {
         return 0;
     }
     lua_createtable (L, 0, 2); // create table object with 2 field
-    // set asset.symbol
+    // set asset.asset_symbol
     lua_pushstring(L, tokenType.c_str());
     lua_setfield(L, -2, "symbol");
 
@@ -2460,32 +2532,27 @@ int32_t ExGetAssetPriceFunc(lua_State *L) {
     CLuaVMRunEnv* pVmRunEnv = GetVmRunEnvByContext(L);
 
     if (!lua_istable(L, -1)) {
-        LogPrint(BCLog::LUAVM,"[ERROR]%s(), input param must be a table\n", __func__);
+        LogPrint(BCLog::LUAVM,"[ERROR] input param must be a table\n");
         return 0;
     }
 
     TokenSymbol baseSymbol;
     if (!(getStringInTable(L, "baseSymbol", baseSymbol))) {
-        LogPrint(BCLog::LUAVM, "[ERROR]%s(), get baseSymbol failed\n", __func__);
+        LogPrint(BCLog::LUAVM, "[ERROR] get baseSymbol failed\n");
         return 0;
     }
 
     TokenSymbol quoteSymbol;
     if (!(getStringInTable(L, "quoteSymbol", quoteSymbol))) {
-        LogPrint(BCLog::LUAVM, "[ERROR]%s(), get quoteSymbol failed\n", __func__);
+        LogPrint(BCLog::LUAVM, "[ERROR] get quoteSymbol failed\n");
         return 0;
     }
 
-    CoinPricePair pricePair(baseSymbol, quoteSymbol);
-    auto pErr = CheckPricePair(pricePair);
-    if (pErr) {
-        LogPrint(BCLog::LUAVM, "[ERROR]%s(), Invalid price pair! %s \n", __func__, *pErr);
-        return 0;
-    }
     LUA_BurnAccount(L, FUEL_CALL_GetAssetPrice, BURN_VER_R2);
 
     auto pAccount = make_shared<CAccount>();
-    uint64_t price = pVmRunEnv->GetCw()->blockCache.GetMedianPrice(pricePair);
+    uint64_t price =
+        pVmRunEnv->GetCw()->priceFeedCache.GetMedianPrice(PriceCoinPair(baseSymbol, quoteSymbol));
 
     // check stack to avoid stack overflow
     if (!lua_checkstack(L, sizeof(lua_Integer))) {
@@ -2495,70 +2562,86 @@ int32_t ExGetAssetPriceFunc(lua_State *L) {
 
     lua_pushinteger(L, price);
 
-    return 1;    
+    return 1;
 }
 
-static const luaL_Reg mylib[] = {
-    {"Int64Mul",                    ExInt64MulFunc},
-    {"Int64Add",                    ExInt64AddFunc},
-    {"Int64Sub",                    ExInt64SubFunc},
-    {"Int64Div",                    ExInt64DivFunc},
-    {"Sha256",                      ExSha256Func},
-    {"Sha256Once",                  ExSha256OnceFunc},
-    {"Des",                         ExDesFunc},
 
-    {"VerifySignature",             ExVerifySignatureFunc},
-    {"LogPrint",                    ExLogPrintFunc},
-    {"GetTxContract",               ExGetTxContractFunc},
-    {"GetTxRegID",                  ExGetTxRegIDFunc},
-    {"GetAccountPublickey",         ExGetAccountPublickeyFunc},
-    {"QueryAccountBalance",         ExQueryAccountBalanceFunc},
-    {"GetTxConfirmHeight",          ExGetTxConfirmHeightFunc},
-    {"GetTxConFirmHeight",          ExGetTxConfirmHeightFunc}, /** deprecated */
-    {"GetBlockHash",                ExGetBlockHashFunc},
+///////////////////////////////////////////////////////////////////////////////
+// functions added in MAJOR_VER_R1
+#define ADDED_MYLIB_FUNC_V1 \
+    {"Int64Mul",                    ExInt64MulFunc},\
+    {"Int64Add",                    ExInt64AddFunc},\
+    {"Int64Sub",                    ExInt64SubFunc},\
+    {"Int64Div",                    ExInt64DivFunc},\
+    {"Sha256",                      ExSha256Func},\
+    {"Sha256Once",                  ExSha256OnceFunc},\
+    {"Des",                         ExDesFunc},\
+\
+    {"VerifySignature",             ExVerifySignatureFunc},\
+    {"LogPrint",                    ExLogPrintFunc},\
+    {"GetTxContract",               ExGetTxContractFunc},\
+    {"GetTxRegID",                  ExGetTxRegIDFunc},\
+    {"GetAccountPublickey",         ExGetAccountPublickeyFunc},\
+    {"QueryAccountBalance",         ExQueryAccountBalanceFunc},\
+    {"GetTxConfirmHeight",          ExGetTxConfirmHeightFunc},\
+    {"GetTxConFirmHeight",          ExGetTxConfirmHeightFunc}, /** deprecated */\
+    {"GetBlockHash",                ExGetBlockHashFunc},\
+\
+    {"GetCurTxHash",                ExGetCurTxHash},\
+    {"GetCurRunEnvHeight",          ExGetCurRunEnvHeightFunc},\
+\
+    {"WriteData",                   ExWriteDataDBFunc},\
+    {"ReadData",                    ExReadDataDBFunc},\
+    {"ModifyData",                  ExModifyDataDBFunc},\
+    {"DeleteData",                  ExDeleteDataDBFunc},\
+\
+    {"WriteOutput",                 ExWriteOutputFunc},\
+    {"GetScriptData",               ExGetContractDataFunc}, /** deprecated */\
+    {"GetContractData",             ExGetContractDataFunc},\
+    {"GetScriptID",                 ExGetContractRegIdFunc}, /** deprecated */\
+    {"GetContractRegId",            ExGetContractRegIdFunc},\
+    {"GetCurTxAccount",             ExGetCurTxAccountFunc},\
+    {"GetCurTxPayAmount",           ExGetCurTxPayAmountFunc},\
+\
+    {"GetUserAppAccValue",          ExGetUserAppAccValueFunc},\
+    {"GetUserAppAccFundWithTag",    ExGetUserAppAccFundWithTagFunc},\
+    {"WriteOutAppOperate",          ExWriteOutAppOperateFunc},\
+\
+    {"GetBase58Addr",               ExGetBase58AddrFunc},\
+    {"ByteToInteger",               ExByteToIntegerFunc},\
+    {"IntegerToByte4",              ExIntegerToByte4Func},\
+    {"IntegerToByte8",              ExIntegerToByte8Func},\
+    {"TransferContractAsset",       ExTransferContractAsset},\
+    {"TransferSomeAsset",           ExTransferSomeAsset},\
+    {"GetBlockTimestamp",           ExGetBlockTimestamp}
 
-    {"GetCurTxHash",                ExGetCurTxHash},
-    {"GetCurRunEnvHeight",          ExGetCurRunEnvHeightFunc},
-
-    {"WriteData",                   ExWriteDataDBFunc},
-    {"ReadData",                    ExReadDataDBFunc},
-    {"ModifyData",                  ExModifyDataDBFunc},
-    {"DeleteData",                  ExDeleteDataDBFunc},
-
-    {"WriteOutput",                 ExWriteOutputFunc},
-    {"GetScriptData",               ExGetContractDataFunc}, /** deprecated */
-    {"GetContractData",             ExGetContractDataFunc},
-    {"GetScriptID",                 ExGetContractRegIdFunc}, /** deprecated */
-    {"GetContractRegId",            ExGetContractRegIdFunc},
-    {"GetCurTxAccount",             ExGetCurTxAccountFunc},
-    {"GetCurTxPayAmount",           ExGetCurTxPayAmountFunc},
-
-    {"GetUserAppAccValue",          ExGetUserAppAccValueFunc},
-    {"GetUserAppAccFundWithTag",    ExGetUserAppAccFundWithTagFunc},
-    {"WriteOutAppOperate",          ExWriteOutAppOperateFunc},
-
-    {"GetBase58Addr",               ExGetBase58AddrFunc},
-    {"ByteToInteger",               ExByteToIntegerFunc},
-    {"IntegerToByte4",              ExIntegerToByte4Func},
-    {"IntegerToByte8",              ExIntegerToByte8Func},
-    {"TransferContractAsset",       ExTransferContractAsset},
-    {"TransferSomeAsset",           ExTransferSomeAsset},
-    {"GetBlockTimestamp",           ExGetBlockTimestamp},
 
 ///////////////////////////////////////////////////////////////////////////////
 // new function add in MAJOR_VER_R2
-    {"TransferAccountAsset",        ExTransferAccountAssetFunc},
-    {"TransferAccountAssets",       ExTransferAccountAssetsFunc},
-    {"GetCurTxInputAsset",          ExGetCurTxInputAssetFunc},
-    {"GetAccountAsset",             ExGetAccountAssetFunc},
-
+#define ADDED_MYLIB_FUNC_V2 \
+    {"TransferAccountAsset",        ExTransferAccountAssetFunc},\
+    {"TransferAccountAssets",       ExTransferAccountAssetsFunc},\
+    {"GetCurTxInputAsset",          ExGetCurTxInputAssetFunc},\
+    {"GetAccountAsset",             ExGetAccountAssetFunc}
 
 ///////////////////////////////////////////////////////////////////////////////
-// new function added in MAJOR_VER_R3
-    {"GetAssetPrice",               ExGetAssetPriceFunc},
+// new function add in MAJOR_VER_R3
+#define ADDED_MYLIB_FUNC_V3 \
+    {"GetAssetPrice",               ExGetAssetPriceFunc}
 
+#define MYLIB_FUNC_END \
     {nullptr, nullptr}
 
+static const luaL_Reg MYLIB_FUNC_V1[] = {
+    ADDED_MYLIB_FUNC_V1, MYLIB_FUNC_END
+};
+
+static const luaL_Reg MYLIB_FUNC_V2[] = {
+    ADDED_MYLIB_FUNC_V1, ADDED_MYLIB_FUNC_V2, MYLIB_FUNC_END
+};
+
+static const luaL_Reg MYLIB_FUNC_V3[] = {
+    ADDED_MYLIB_FUNC_V1, ADDED_MYLIB_FUNC_V2, ADDED_MYLIB_FUNC_V3, MYLIB_FUNC_END
 };
 
 // replace all global(in the _G) functions
@@ -2569,17 +2652,29 @@ static const luaL_Reg baseLibsEx[] = {
     {nullptr, nullptr}
 };
 
-/*
- * 注册一个新Lua模块*/
-#ifdef WIN_DLL
-    extern "C" __declspec(dllexport)int32_t luaopen_mylib(lua_State *L)
-#else
-    LUAMOD_API int32_t luaopen_mylib(lua_State *L)
-#endif
-
-{
-    luaL_newlib(L, mylib); //生成一个table,把mylibs所有函数填充进去
+int32_t luaopen_mylib_v1(lua_State *L) {
+    luaL_newlib(L, MYLIB_FUNC_V1);
     return 1;
+}
+
+int32_t luaopen_mylib_v2(lua_State *L) {
+    luaL_newlib(L, MYLIB_FUNC_V2);
+    return 1;
+}
+
+int32_t luaopen_mylib_v3(lua_State *L) {
+    luaL_newlib(L, MYLIB_FUNC_V3);
+    return 1;
+}
+
+lua_CFunction GetLuaMylib(HeightType height) {
+    auto featureForkVersion = GetFeatureForkVersion(height);
+    switch(featureForkVersion) {
+        case MAJOR_VER_R1:  return luaopen_mylib_v1;
+        case MAJOR_VER_R2:  return luaopen_mylib_v2;
+        case MAJOR_VER_R3:
+        default:            return luaopen_mylib_v3;
+    }
 }
 
 bool InitLuaLibsEx(lua_State *L) {

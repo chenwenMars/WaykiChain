@@ -8,37 +8,32 @@
 
 
 #include "commons/serialize.h"
-#include "tx/tx.h"
-
+#include "tx/accountpermscleartx.h"
+#include "tx/assettx.h"
 #include "tx/accountregtx.h"
-#include "tx/cointransfertx.h"
 #include "tx/blockpricemediantx.h"
 #include "tx/blockrewardtx.h"
 #include "tx/cdptx.h"
-#include "tx/coinrewardtx.h"
+#include "tx/coinminttx.h"
 #include "tx/cointransfertx.h"
+#include "tx/coinutxotx.h"
 #include "tx/contracttx.h"
 #include "tx/delegatetx.h"
 #include "tx/dextx.h"
 #include "tx/coinstaketx.h"
-#include "tx/mulsigtx.h"
 #include "tx/pricefeedtx.h"
 #include "tx/tx.h"
-#include "tx/assettx.h"
-#include "tx/wasmcontracttx.h"
-#include "tx/nickidregtx.h"
-#include "tx/einvalidtxtype.h"
 #include "tx/dexoperatortx.h"
 #include "tx/proposaltx.h"
+#include "tx/universaltx.h"
 
 using namespace std;
-
 
 template<typename Stream>
 void CBaseTx::SerializePtr(Stream& os, const std::shared_ptr<CBaseTx> &pBaseTx, int serType, int version) {
 
     // if (!pBaseTx) {
-    //     throw EInvalidTxType(strprintf("%s(), unsupport null tx type to serialize",
+    //     throw runtime_error(strprintf("%s(), unsupport null tx type to serialize",
     //         __FUNCTION__));
     // }
     const CBaseTx &tx = *pBaseTx;
@@ -58,19 +53,22 @@ void CBaseTx::SerializePtr(Stream& os, const std::shared_ptr<CBaseTx> &pBaseTx, 
         case DELEGATE_VOTE_TX:
             ::Serialize(os, (const CDelegateVoteTx&)tx, serType, version); break;
 
-        case UCOIN_TRANSFER_MTX:
-            ::Serialize(os, (const CMulsigTx&)tx, serType, version); break;
         case UCOIN_STAKE_TX:
             ::Serialize(os, (const CCoinStakeTx&)tx, serType, version); break;
         case ASSET_ISSUE_TX:
-            ::Serialize(os, (const CAssetIssueTx&)tx, serType, version); break;
-        case ASSET_UPDATE_TX:
-            ::Serialize(os, (const CAssetUpdateTx&)tx, serType, version); break;
+            ::Serialize(os, (const CUserIssueAssetTx&)tx, serType, version); break;
+        case UIA_UPDATE_TX:
+            ::Serialize(os, (const CUserUpdateAssetTx&)tx, serType, version); break;
+
+        case UTXO_TRANSFER_TX:
+            ::Serialize(os, (const CCoinUtxoTransferTx&)tx, serType, version); break;
+         case UTXO_PASSWORD_PROOF_TX:
+            ::Serialize(os, (const CCoinUtxoPasswordProofTx&)tx, serType, version); break;
 
         case UCOIN_TRANSFER_TX:
             ::Serialize(os, (const CCoinTransferTx&)tx, serType, version); break;
-        case UCOIN_REWARD_TX:
-            ::Serialize(os, (const CCoinRewardTx&)tx, serType, version); break;
+        case UCOIN_MINT_TX:
+            ::Serialize(os, (const CCoinMintTx&)tx, serType, version); break;
         case UCOIN_BLOCK_REWARD_TX:
             ::Serialize(os, (const CUCoinBlockRewardTx&)tx, serType, version); break;
         case UCONTRACT_DEPLOY_TX:
@@ -88,12 +86,8 @@ void CBaseTx::SerializePtr(Stream& os, const std::shared_ptr<CBaseTx> &pBaseTx, 
             ::Serialize(os, (const CCDPRedeemTx&)tx, serType, version); break;
         case CDP_LIQUIDATE_TX:
             ::Serialize(os, (const CCDPLiquidateTx&)tx, serType, version); break;
-
-        case NICKID_REGISTER_TX:
-            ::Serialize(os, (const CNickIdRegisterTx&)tx, serType, version); break;
-
-        case WASM_CONTRACT_TX:
-            ::Serialize(os, (const CWasmContractTx&)tx, serType, version); break;
+        case CDP_FORCE_SETTLE_INTEREST_TX:
+            ::Serialize(os, (const CCDPInterestForceSettleTx&)tx, serType, version); break;
 
         case DEX_TRADE_SETTLE_TX:
             ::Serialize(os, (const dex::CDEXSettleTx&)tx, serType, version); break;
@@ -118,13 +112,18 @@ void CBaseTx::SerializePtr(Stream& os, const std::shared_ptr<CBaseTx> &pBaseTx, 
             ::Serialize(os, (const CDEXOperatorRegisterTx&)tx, serType, version); break;
 
         case PROPOSAL_REQUEST_TX:
-            ::Serialize(os, (const CProposalCreateTx&)tx,serType, version); break ;
+            ::Serialize(os, (const CProposalRequestTx&)tx,serType, version); break;
         case PROPOSAL_APPROVAL_TX:
-            ::Serialize(os, (const CProposalAssentTx&)tx,serType, version); break ;
+            ::Serialize(os, (const CProposalApprovalTx&)tx,serType, version); break;
+        case ACCOUNT_PERMS_CLEAR_TX:
+            ::Serialize(os, (const CAccountPermsClearTx&)tx,serType, version); break;
+
+        case UNIVERSAL_TX:
+            ::Serialize(os, (const CUniversalTx&)tx, serType, version); break;
 
         default:
-            throw EInvalidTxType(strprintf("%s(), unsupport nTxType(%d:%s) to serialize",
-                __FUNCTION__, tx.nTxType, GetTxType(tx.nTxType)));
+            throw runtime_error(strprintf("%s(), unsupport nTxType(%d:%s) to serialize",
+                                __FUNCTION__, tx.nTxType, GetTxType(tx.nTxType)));
             break;
     }
 }
@@ -165,12 +164,6 @@ void CBaseTx::UnserializePtr(Stream& is, std::shared_ptr<CBaseTx> &pBaseTx, int 
             break;
         }
 
-        case UCOIN_TRANSFER_MTX: {
-            pBaseTx = std::make_shared<CMulsigTx>();
-            ::Unserialize(is, *((CMulsigTx *)(pBaseTx.get())), serType, version);
-            break;
-        }
-
         case UCOIN_STAKE_TX: {
             pBaseTx = std::make_shared<CCoinStakeTx>();
             ::Unserialize(is, *((CCoinStakeTx *)(pBaseTx.get())), serType, version);
@@ -178,14 +171,14 @@ void CBaseTx::UnserializePtr(Stream& is, std::shared_ptr<CBaseTx> &pBaseTx, int 
         }
 
         case ASSET_ISSUE_TX: {
-            pBaseTx = std::make_shared<CAssetIssueTx>();
-            ::Unserialize(is, *((CAssetIssueTx *)(pBaseTx.get())), serType, version);
+            pBaseTx = std::make_shared<CUserIssueAssetTx>();
+            ::Unserialize(is, *((CUserIssueAssetTx *)(pBaseTx.get())), serType, version);
             break;
         }
 
-        case ASSET_UPDATE_TX: {
-            pBaseTx = std::make_shared<CAssetUpdateTx>();
-            ::Unserialize(is, *((CAssetUpdateTx *)(pBaseTx.get())), serType, version);
+        case UIA_UPDATE_TX: {
+            pBaseTx = std::make_shared<CUserUpdateAssetTx>();
+            ::Unserialize(is, *((CUserUpdateAssetTx *)(pBaseTx.get())), serType, version);
             break;
         }
 
@@ -194,9 +187,22 @@ void CBaseTx::UnserializePtr(Stream& is, std::shared_ptr<CBaseTx> &pBaseTx, int 
             ::Unserialize(is, *((CCoinTransferTx *)(pBaseTx.get())), serType, version);
             break;
         }
-        case UCOIN_REWARD_TX: {
-            pBaseTx = std::make_shared<CCoinRewardTx>();
-            ::Unserialize(is, *((CCoinRewardTx *)(pBaseTx.get())), serType, version);
+
+        case UTXO_TRANSFER_TX: {
+            pBaseTx = std::make_shared<CCoinUtxoTransferTx>();
+            ::Unserialize(is, *((CCoinUtxoTransferTx *)(pBaseTx.get())), serType, version);
+            break;
+        }
+
+        case UTXO_PASSWORD_PROOF_TX: {
+            pBaseTx = std::make_shared<CCoinUtxoPasswordProofTx>();
+            ::Unserialize(is, *((CCoinUtxoPasswordProofTx *)(pBaseTx.get())), serType, version);
+            break;
+        }
+
+        case UCOIN_MINT_TX: {
+            pBaseTx = std::make_shared<CCoinMintTx>();
+            ::Unserialize(is, *((CCoinMintTx *)(pBaseTx.get())), serType, version);
             break;
         }
         case UCOIN_BLOCK_REWARD_TX: {
@@ -240,19 +246,11 @@ void CBaseTx::UnserializePtr(Stream& is, std::shared_ptr<CBaseTx> &pBaseTx, int 
             ::Unserialize(is, *((CCDPLiquidateTx *)(pBaseTx.get())), serType, version);
             break;
         }
-
-        case NICKID_REGISTER_TX: {
-            pBaseTx = std::make_shared<CNickIdRegisterTx>();
-            ::Unserialize(is, *((CNickIdRegisterTx *)(pBaseTx.get())), serType, version);
+        case CDP_FORCE_SETTLE_INTEREST_TX: {
+            pBaseTx = std::make_shared<CCDPInterestForceSettleTx>();
+            ::Unserialize(is, *((CCDPInterestForceSettleTx *)(pBaseTx.get())), serType, version);
             break;
         }
-
-        case WASM_CONTRACT_TX: {
-            pBaseTx = std::make_shared<CWasmContractTx>();
-            ::Unserialize(is, *((CWasmContractTx *)(pBaseTx.get())), serType, version);
-            break;
-        }
-
         case DEX_TRADE_SETTLE_TX: {
             pBaseTx = std::make_shared<dex::CDEXSettleTx>();
             ::Unserialize(is, *((dex::CDEXSettleTx *)(pBaseTx.get())), serType, version);
@@ -306,21 +304,32 @@ void CBaseTx::UnserializePtr(Stream& is, std::shared_ptr<CBaseTx> &pBaseTx, int 
             break;
         }
 
-
         case PROPOSAL_REQUEST_TX: {
-            pBaseTx = std::make_shared<CProposalCreateTx>();
-            ::Unserialize(is, *((CProposalCreateTx *)(pBaseTx.get())), serType, version);
+            pBaseTx = std::make_shared<CProposalRequestTx>();
+            ::Unserialize(is, *((CProposalRequestTx *)(pBaseTx.get())), serType, version);
             break;
         }
         case PROPOSAL_APPROVAL_TX: {
-            pBaseTx = std::make_shared<CProposalAssentTx>();
-            ::Unserialize(is, *((CProposalAssentTx *)(pBaseTx.get())), serType, version);
+            pBaseTx = std::make_shared<CProposalApprovalTx>();
+            ::Unserialize(is, *((CProposalApprovalTx *)(pBaseTx.get())), serType, version);
+            break;
+        }
+
+        case ACCOUNT_PERMS_CLEAR_TX: {
+            pBaseTx = std::make_shared<CAccountPermsClearTx>();
+            ::Unserialize(is, *((CAccountPermsClearTx *)(pBaseTx.get())), serType, version);
+            break;
+        }
+
+        case UNIVERSAL_TX: {
+            pBaseTx = std::make_shared<CUniversalTx>();
+            ::Unserialize(is, *((CUniversalTx *)(pBaseTx.get())), serType, version);
             break;
         }
 
         default:
-            throw EInvalidTxType(strprintf("%s(), unsupport nTxType(%d:%s) to unserialize",
-                __FUNCTION__, pBaseTx->nTxType, GetTxType(pBaseTx->nTxType)));
+            throw runtime_error(strprintf("%s(), unsupport nTxType(%d:%s) to unserialize",
+                                __FUNCTION__, nTxType, GetTxType((TxType)nTxType)));
     }
     pBaseTx->nTxType = TxType(nTxType);
 }

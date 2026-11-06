@@ -14,7 +14,7 @@
 
 namespace dex {
 
-    static const UnorderdEnumMap<TxType> DEX_ORDER_TX_SET = {
+    static const EnumUnorderedSet<TxType> DEX_ORDER_TX_SET = {
         DEX_LIMIT_BUY_ORDER_TX,
         DEX_LIMIT_SELL_ORDER_TX,
         DEX_MARKET_BUY_ORDER_TX,
@@ -24,29 +24,30 @@ namespace dex {
         DEX_CANCEL_ORDER_TX
     };
 
-    struct OrderOperatorData {
-        OperatorFeeRatios fee_ratios;           //!< operator fee ratios
-        CUserID operator_uid;                   //!< dex operator uid
-        UnsignedCharArray operator_signature;   //!< dex operator signature
-    };
+    uint64_t CalcOrderMinFee(uint64_t defaultMinFee, uint64_t stakedWiccAmount);
+    shared_ptr<string> CheckOrderMinFee(HeightType height, const CAccount &txAccount,
+                                        const uint64_t txFee, uint64_t minFee,
+                                        CAccount *pOperatorAccount, uint64_t operatorTxFee);
 
     class CDEXOrderBaseTx : public CBaseTx {
     public:
-        OrderType order_type   = ORDER_LIMIT_PRICE; //!< order type
-        OrderSide order_side        = ORDER_BUY;         //!< order side
-        TokenSymbol coin_symbol     = "";                //!< coin symbol
-        TokenSymbol asset_symbol    = "";                //!< asset symbol
-        uint64_t coin_amount        = 0;                 //!< amount of coin to buy/sell asset
-        uint64_t asset_amount       = 0;                 //!< amount of asset to buy/sell
-        uint64_t price              = 0;                 //!< price in coinType want to buy/sell asset
-        DexID dex_id                = 0;                 //!< dex id
-        PublicMode public_mode = ORDER_PUBLIC; //!< order public mode
-        string memo                 = "";                   //!< memo
+        OrderType order_type        = ORDER_LIMIT_PRICE;//!< order type
+        OrderSide order_side        = ORDER_BUY;        //!< order side
+        TokenSymbol coin_symbol     = "";               //!< coin symbol
+        TokenSymbol asset_symbol    = "";               //!< asset symbol
+        uint64_t coin_amount        = 0;                //!< amount of coin to buy/sell asset
+        uint64_t asset_amount       = 0;                //!< amount of asset to buy/sell
+        uint64_t price              = 0;                //!< price in coinType want to buy/sell asset
+        DexID dex_id                = 0;                //!< dex id
+        string memo                 = "";               //!< memo
 
-        bool has_operator_config      = false;
-        OperatorFeeRatios operator_fee_ratios;           //!< operator fee ratios
-        CUserID operator_uid        = CUserID();            //!< dex operator uid
-        UnsignedCharArray operator_signature;               //!< dex operator signature
+        bool has_operator_config      = false;          //! has operator config
+        OpenMode open_mode = OpenMode::PUBLIC;    //!< order public mode
+        uint64_t maker_fee_ratio = 0;                   //!< match fee ratio
+        uint64_t taker_fee_ratio = 0;                   //!< taker fee ratio
+        CUserID operator_uid        = CUserID();        //!< dex operator uid
+        uint64_t operator_tx_fee    = 0;                //!< tx fee paid by operator, symbol==fee_symbol, the total_fee=llFee+operator_tx_fee
+        UnsignedCharArray operator_signature;           //!< dex operator signature
 
         using CBaseTx::CBaseTx;
     public:
@@ -55,8 +56,10 @@ namespace dex {
         virtual bool ExecuteTx(CTxExecuteContext &context);
 
         virtual string ToString(CAccountDBCache &accountCache); //logging usage
-        virtual Object ToJson(const CAccountDBCache &accountCache) const; //json-rpc usage
+        virtual Object ToJson(CCacheWrapper &cw) const; //json-rpc usage
     protected:
+        virtual bool CheckMinFee(CTxExecuteContext &context, uint64_t minFee);
+
         bool CheckOrderSymbols(CTxExecuteContext &context, const TokenSymbol &coinSymbol,
                             const TokenSymbol &assetSymbol);
 
@@ -66,12 +69,13 @@ namespace dex {
 
         bool CheckOrderPrice(CTxExecuteContext &context);
 
-        bool CheckDexOperatorExist(CTxExecuteContext &context);
-
-        bool CheckOrderOperator(CTxExecuteContext &context);
+        bool GetOrderOperator(CTxExecuteContext &context,
+                              DexOperatorDetail &operatorDetail) const;
+        bool CheckOrderOperatorParam(CTxExecuteContext &context, DexOperatorDetail &operatorDetail,
+                              CAccount &operatorAccount) const;
 
         bool FreezeBalance(CTxExecuteContext &context, CAccount &account,
-                        const TokenSymbol &tokenSymbol, const uint64_t &amount);
+                        const TokenSymbol &tokenSymbol, const uint64_t &amount, ReceiptType code);
 
     public:
         static uint64_t CalcCoinAmount(uint64_t assetAmount, const uint64_t price);
@@ -87,7 +91,6 @@ namespace dex {
             order_type  = ORDER_LIMIT_PRICE;
             order_side  = ORDER_BUY;
             dex_id      = DEX_RESERVED_ID;
-            public_mode = ORDER_PUBLIC;
         }
 
         CDEXBuyLimitOrderTx(const CUserID &txUidIn, int32_t validHeightIn, const TokenSymbol &feeSymbol,
@@ -103,7 +106,6 @@ namespace dex {
             asset_amount = assetAmountIn;
             price        = priceIn;
             dex_id       = DEX_RESERVED_ID;
-            public_mode  = ORDER_PUBLIC;
             // other order fields are default value
         }
 
@@ -143,7 +145,6 @@ namespace dex {
             order_type  = ORDER_LIMIT_PRICE;
             order_side  = ORDER_SELL;
             dex_id      = DEX_RESERVED_ID;
-            public_mode = ORDER_PUBLIC;
             // other order fields are default value
         }
 
@@ -159,7 +160,6 @@ namespace dex {
             asset_amount = assetAmountIn;
             price        = priceIn;
             dex_id       = DEX_RESERVED_ID;
-            public_mode  = ORDER_PUBLIC;
             // other order fields are default value
         }
 
@@ -199,7 +199,6 @@ namespace dex {
             order_type   = ORDER_MARKET_PRICE;
             order_side   = ORDER_BUY;
             dex_id       = DEX_RESERVED_ID;
-            public_mode  = ORDER_PUBLIC;
             // other order fields are default value
         }
 
@@ -215,7 +214,6 @@ namespace dex {
             asset_amount = 0;
             price        = 0;
             dex_id       = DEX_RESERVED_ID;
-            public_mode  = ORDER_PUBLIC;
             // other order fields are default value
         }
 
@@ -253,7 +251,6 @@ namespace dex {
             order_type   = ORDER_MARKET_PRICE;
             order_side   = ORDER_SELL;
             dex_id       = DEX_RESERVED_ID;
-            public_mode  = ORDER_PUBLIC;
             // other order fields are default value
         }
 
@@ -269,7 +266,6 @@ namespace dex {
             asset_amount = assetAmountIn;
             price        = 0;
             dex_id       = DEX_RESERVED_ID;
-            public_mode  = ORDER_PUBLIC;
             // other order fields are default value
         }
 
@@ -303,10 +299,10 @@ namespace dex {
 
     class CDEXOrderTx : public CDEXOrderBaseTx {
     public:
-        struct OrderDataSerializer {
+        struct OrderData {
             CDEXOrderTx &tx;
 
-            OrderDataSerializer(const CDEXOrderTx *pTxIn): tx((CDEXOrderTx&)*pTxIn) {}
+            OrderData(const CDEXOrderTx &txIn): tx(REF(txIn)) {}
 
             IMPLEMENT_SERIALIZE(
                 READWRITE_ENUM(tx.order_type, uint8_t);
@@ -317,7 +313,6 @@ namespace dex {
                 READWRITE(VARINT(tx.coin_amount));
                 READWRITE(VARINT(tx.price));
                 READWRITE(VARINT(tx.dex_id));
-                READWRITE_ENUM(tx.public_mode, uint8_t);
                 READWRITE(tx.memo);
             )
         };
@@ -329,7 +324,7 @@ namespace dex {
                     uint64_t fees, OrderType orderTypeIn, OrderSide orderSideIn,
                     const TokenSymbol &coinSymbolIn, const TokenSymbol &assetSymbolIn,
                     uint64_t coinAmountIn, uint64_t assetAmountIn, uint64_t priceIn, DexID dexIdIn,
-                    PublicMode publicModeIn, const string &memoIn)
+                    const string &memoIn)
             : CDEXOrderBaseTx(DEX_ORDER_TX, txUidIn, validHeightIn, feeSymbol, fees) {
             order_type   = orderTypeIn;
             order_side   = orderSideIn;
@@ -339,7 +334,6 @@ namespace dex {
             asset_amount = assetAmountIn;
             price        = priceIn;
             dex_id       = dexIdIn;
-            public_mode  = publicModeIn;
             memo         = memoIn;
         }
 
@@ -351,19 +345,18 @@ namespace dex {
 
             READWRITE(fee_symbol);
             READWRITE(VARINT(llFees));
-            READWRITE(order_data_ser);
+            READWRITE(REF(OrderData(*this)));
 
             READWRITE(signature);
         )
 
         virtual void SerializeForHash(CHashWriter &hw) const {
             hw << VARINT(nVersion) << (uint8_t)nTxType << VARINT(valid_height) << txUid << fee_symbol
-            << VARINT(llFees) << order_data_ser;
+            << VARINT(llFees) << OrderData(*this);
         }
 
         virtual std::shared_ptr<CBaseTx> GetNewInstance() const { return std::make_shared<CDEXOrderTx>(*this); }
-    private:
-        OrderDataSerializer order_data_ser = OrderDataSerializer(this);
+        virtual bool CheckTx(CTxExecuteContext &context);
     };
 
     ////////////////////////////////////////////////////////////////////////////////
@@ -371,10 +364,10 @@ namespace dex {
 
     class CDEXOperatorOrderTx : public CDEXOrderBaseTx {
     public:
-        struct OrderDataSerializer {
+        struct OrderData {
             CDEXOperatorOrderTx &tx;
 
-            OrderDataSerializer(const CDEXOperatorOrderTx *pTxIn): tx((CDEXOperatorOrderTx&)*pTxIn) {}
+            OrderData(const CDEXOperatorOrderTx &txIn): tx(REF(txIn)) {}
 
             IMPLEMENT_SERIALIZE(
                 READWRITE_ENUM(tx.order_type, uint8_t);
@@ -385,23 +378,29 @@ namespace dex {
                 READWRITE(VARINT(tx.coin_amount));
                 READWRITE(VARINT(tx.price));
                 READWRITE(VARINT(tx.dex_id));
-                READWRITE_ENUM(tx.public_mode, uint8_t);
-                READWRITE(tx.memo);
-                READWRITE(tx.operator_fee_ratios);
+                READWRITE_ENUM(tx.open_mode, uint8_t);
+                READWRITE(VARINT(tx.maker_fee_ratio));
+                READWRITE(VARINT(tx.taker_fee_ratio));
                 READWRITE(tx.operator_uid);
+                READWRITE(VARINT(tx.operator_tx_fee));
+                READWRITE(tx.memo);
             )
         };
 
     public:
-        CDEXOperatorOrderTx() : CDEXOrderBaseTx(DEX_ORDER_TX) {}
+        CDEXOperatorOrderTx() : CDEXOrderBaseTx(DEX_OPERATOR_ORDER_TX) {
+            has_operator_config = true;
+        }
 
-        CDEXOperatorOrderTx(const CUserID &txUidIn, int32_t validHeightIn, const TokenSymbol &feeSymbol,
-                            uint64_t fees, OrderType orderTypeIn, OrderSide orderSideIn,
-                            const TokenSymbol &coinSymbolIn, const TokenSymbol &assetSymbolIn,
-                            uint64_t coinAmountIn, uint64_t assetAmountIn, uint64_t priceIn,
-                            DexID dexIdIn, PublicMode publicModeIn, const string &memoIn,
-                            const OperatorFeeRatios &operatorFeeRatiosIn, const CUserID &operatorUidIn)
-            : CDEXOrderBaseTx(DEX_ORDER_TX, txUidIn, validHeightIn, feeSymbol, fees) {
+        CDEXOperatorOrderTx(const CUserID &txUidIn, int32_t validHeightIn,
+                            const TokenSymbol &feeSymbol, uint64_t fees, OrderType orderTypeIn,
+                            OrderSide orderSideIn, const TokenSymbol &coinSymbolIn,
+                            const TokenSymbol &assetSymbolIn, uint64_t coinAmountIn,
+                            uint64_t assetAmountIn, uint64_t priceIn, DexID dexIdIn,
+                            OpenMode openModeIn, uint64_t makerFeeRatioIn,
+                            uint64_t takerFeeRatioIn, const CUserID &operatorUidIn,
+                            uint64_t operatorTxFeeIn, const string &memoIn)
+            : CDEXOrderBaseTx(DEX_OPERATOR_ORDER_TX, txUidIn, validHeightIn, feeSymbol, fees) {
             order_type          = orderTypeIn;
             order_side          = orderSideIn;
             coin_symbol         = coinSymbolIn;
@@ -410,11 +409,13 @@ namespace dex {
             asset_amount        = assetAmountIn;
             price               = priceIn;
             dex_id              = dexIdIn;
-            public_mode         = publicModeIn;
+            open_mode           = openModeIn;
             memo                = memoIn;
             has_operator_config = true;
-            operator_fee_ratios = operatorFeeRatiosIn;
+            maker_fee_ratio     = makerFeeRatioIn;
+            taker_fee_ratio     = takerFeeRatioIn;
             operator_uid        = operatorUidIn;
+            operator_tx_fee     = operatorTxFeeIn;
         }
 
         IMPLEMENT_SERIALIZE(
@@ -425,7 +426,7 @@ namespace dex {
 
             READWRITE(fee_symbol);
             READWRITE(VARINT(llFees));
-            READWRITE(order_data_ser);
+            READWRITE(REF(OrderData(*this)));
 
             READWRITE(signature);
             READWRITE(operator_signature);
@@ -433,12 +434,13 @@ namespace dex {
 
         virtual void SerializeForHash(CHashWriter &hw) const {
             hw << VARINT(nVersion) << (uint8_t)nTxType << VARINT(valid_height) << txUid << fee_symbol
-            << VARINT(llFees) << order_data_ser;
+            << VARINT(llFees) << OrderData(*this);
         }
 
+        virtual std::pair<TokenSymbol, uint64_t> GetFees() const { return std::make_pair(fee_symbol, llFees + operator_tx_fee); }
+
         virtual std::shared_ptr<CBaseTx> GetNewInstance() const { return std::make_shared<CDEXOperatorOrderTx>(*this); }
-    private:
-        OrderDataSerializer order_data_ser = OrderDataSerializer(this);
+        virtual bool CheckTx(CTxExecuteContext &context);
     };
 
     ////////////////////////////////////////////////////////////////////////////////
@@ -474,10 +476,13 @@ namespace dex {
 
         virtual std::shared_ptr<CBaseTx> GetNewInstance() const { return std::make_shared<CDEXCancelOrderTx>(*this); }
         virtual string ToString(CAccountDBCache &accountCache); //logging usage
-        virtual Object ToJson(const CAccountDBCache &accountCache) const; //json-rpc usage
+        virtual Object ToJson(CCacheWrapper &cw) const; //json-rpc usage
 
         virtual bool CheckTx(CTxExecuteContext &context);
         virtual bool ExecuteTx(CTxExecuteContext &context);
+
+    protected:
+        virtual bool CheckMinFee(CTxExecuteContext &context, uint64_t minFee);
     public:
         uint256  order_id;       //!< id of oder need to be canceled.
     };
@@ -534,7 +539,7 @@ namespace dex {
         virtual std::shared_ptr<CBaseTx> GetNewInstance() const { return std::make_shared<CDEXSettleTx>(*this); }
 
         virtual string ToString(CAccountDBCache &accountCache); //logging usage
-        virtual Object ToJson(const CAccountDBCache &accountCache) const; //json-rpc usage
+        virtual Object ToJson(CCacheWrapper &cw) const; //json-rpc usage
 
         virtual bool CheckTx(CTxExecuteContext &context);
         virtual bool ExecuteTx(CTxExecuteContext &context);

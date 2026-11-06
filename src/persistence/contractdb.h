@@ -21,7 +21,6 @@
 #include <utility>
 #include <vector>
 
-class CVmOperate;
 class CKeyID;
 class CRegID;
 class CAccount;
@@ -81,15 +80,14 @@ public:
     bool GetContractAccount(const CRegID &contractRegId, const string &accountKey, CAppUserAccount &appAccOut);
     bool SetContractAccount(const CRegID &contractRegId, const CAppUserAccount &appAccIn);
 
-    bool GetContract(const CRegID &contractRegId, CUniversalContract &contract);
-    bool GetContracts(map<CRegIDKey, CUniversalContract> &contracts);
-    bool SaveContract(const CRegID &contractRegId, const CUniversalContract &contract);
-    bool HaveContract(const CRegID &contractRegId);
+    bool GetContract(const CRegID &contractRegId, CUniversalContractStore &contractStore);
+    bool SaveContract(const CRegID &contractRegId, const CUniversalContractStore &contractStore);
+    bool HasContract(const CRegID &contractRegId);
     bool EraseContract(const CRegID &contractRegId);
 
     bool GetContractData(const CRegID &contractRegId, const string &contractKey, string &contractData);
     bool SetContractData(const CRegID &contractRegId, const string &contractKey, const string &contractData);
-    bool HaveContractData(const CRegID &contractRegId, const string &contractKey);
+    bool HasContractData(const CRegID &contractRegId, const string &contractKey);
     bool EraseContractData(const CRegID &contractRegId, const string &contractKey);
 
     bool GetContractTraces(const uint256 &txid, string &contractTraces);
@@ -122,19 +120,21 @@ public:
     shared_ptr<CDBContractDataIterator> CreateContractDataIterator(const CRegID &contractRegid,
         const string &contractKeyPrefix);
 
-private:
+public:
 /*       type               prefixType               key                     value                 variable               */
 /*  ----------------   -------------------------   -----------------------  ------------------   ------------------------ */
     /////////// ContractDB
-    // contract $RegIdKey -> Contract
-    CCompositeKVCache< dbk::CONTRACT_DEF,         CRegIDKey,                   CUniversalContract >   contractCache;
+    // contract $RegIdKey -> CUniversalContractStore
+    CCompositeKVCache< dbk::CONTRACT_DEF,         CRegIDKey,                  CUniversalContractStore >   contractCache;
 
     // pair<contractRegId, contractKey> -> contractData
     DBContractDataCache contractDataCache;
+
     // pair<contractRegId, accountKey> -> appUserAccount
-    CCompositeKVCache< dbk::CONTRACT_ACCOUNT,     pair<CRegIDKey, string>,     CAppUserAccount >      contractAccountCache;
+    CCompositeKVCache< dbk::CONTRACT_ACCOUNT,     pair<CRegIDKey, string>,     CAppUserAccount >           contractAccountCache;
+
     // txid -> contract_traces
-    CCompositeKVCache< dbk::CONTRACT_TRACES,     uint256,                  string >      contractTracesCache;
+    CCompositeKVCache< dbk::CONTRACT_TRACES,     uint256,                      string >                    contractTracesCache;
 };
 
 #endif  // PERSIST_CONTRACTDB_H

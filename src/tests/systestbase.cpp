@@ -65,8 +65,7 @@ bool PrintTestNotSetPara() {
 bool AppInit(int argc, char *argv[], boost::thread_group &threadGroup) {
     bool fRet = false;
     try {
-        CBaseParams::InitializeParams(argc, argv);
-        SysCfg().InitializeConfig();
+        CBaseParams::LoadParamsFromConfigFile(argc, argv);
 
         PrintTestNotSetPara();
 
@@ -217,7 +216,7 @@ Value SysTestBase::CreateRegAppTx(const string &strAddress, const string &strScr
     string strHeight = strprintf("%d", height);
 
     const char *argv[] = {"rpctest",
-                          "submitcontractdeploytx",
+                          "submitluacontractdeploytx",
                           (char *)strAddress.c_str(),
                           (char *)filepath.c_str(),
                           (char *)strFee.c_str(),
@@ -458,7 +457,7 @@ Value SysTestBase::CallContractTx(const std::string &scriptid, const std::string
     string pmoney = strprintf("%ld", nMoney);
 
     const char *argv[] = {"rpctest",
-                          "submitcontractcalltx",
+                          "submitluacontractcalltx",
                           (char *)(addrs.c_str()),
                           (char *)(scriptid.c_str()),
                           (char *)pmoney.c_str(),
@@ -688,7 +687,7 @@ bool SysTestBase::GegRegId(string &strAddr, CRegID &regId) {
     if (!accountDbCache.GetAccount(userId, account)) {
         return false;
     }
-    if ((!account.HaveOwnerPubKey()) || account.regid.IsEmpty()) {
+    if ((!account.HasOwnerPubKey()) || account.regid.IsEmpty()) {
         return false;
     }
 

@@ -21,8 +21,9 @@ static const DexID DEX_RESERVED_ID = 0;
 namespace dex {
 
     enum OrderSide: uint8_t {
-        ORDER_BUY  = 1,
-        ORDER_SELL = 2,
+        ORDER_SIDE_NULL = 0,
+        ORDER_BUY       = 1,
+        ORDER_SELL      = 2,
     };
 
     static const EnumHelper<OrderSide, uint8_t> kOrderSideHelper = {
@@ -33,6 +34,7 @@ namespace dex {
     };
 
     enum OrderType: uint8_t {
+        ORDER_TYPE_NULL     = 0,
         ORDER_LIMIT_PRICE   = 1, //!< limit price order type
         ORDER_MARKET_PRICE  = 2  //!< market price order type
     };
@@ -44,19 +46,25 @@ namespace dex {
         }
     };
 
+////////////////////////////////////////////////////////////////////////////////
+// enum class OpenMode
 
-    enum PublicMode: uint8_t {
-        ORDER_PUBLIC,
-        ORDER_PRIVATE
+    enum class OpenMode: uint8_t {
+        PUBLIC   = 1,
+        PRIVATE  = 2
     };
 
-    static const EnumHelper<PublicMode, uint8_t> kPublicModeHelper (
+    static const OpenMode OPEN_MODE_DEFAULT = OpenMode::PRIVATE;
+
+    static const EnumHelper<OpenMode, uint8_t> kOpenModeHelper (
         {
-            {ORDER_PUBLIC, "PUBLIC"},
-            {ORDER_PRIVATE, "PRIVATE"}
+            {OpenMode::PUBLIC, "PUBLIC"},
+            {OpenMode::PRIVATE, "PRIVATE"}
         }
     );
 
+////////////////////////////////////////////////////////////////////////////////
+// enum OrderGenerateType
 
     enum OrderGenerateType: uint8_t {
         EMPTY_ORDER         = 0,
@@ -77,23 +85,24 @@ namespace dex {
         return EMPTY_STRING;
     }
 
-    struct OperatorFeeRatios {
+    struct COrderOperatorParams {
+        OpenMode open_mode   = OpenMode::PRIVATE;//!< order open mode
         uint64_t maker_fee_ratio = 0; //!< match fee ratio
-        uint64_t taker_fee_ratio = 0; //!< match fee ratio
-
-
-        OperatorFeeRatios() {}
-        OperatorFeeRatios(uint64_t makerFeeRatio, uint64_t takerFeeRatio)
-            : maker_fee_ratio(makerFeeRatio), taker_fee_ratio(takerFeeRatio) {}
-
+        uint64_t taker_fee_ratio = 0; //!< taker fee ratio
 
         IMPLEMENT_SERIALIZE(
+            READWRITE_ENUM(open_mode, uint8_t);
             READWRITE(VARINT(maker_fee_ratio));
             READWRITE(VARINT(taker_fee_ratio));
         )
 
         string ToString() const;
         Object ToJson() const;
+    };
+
+    struct CDEXOrderSrc {
+        string src_type; //!< src type of order
+        uint256 src_id;  //!< src id, such as txid
     };
 
     struct CDEXOrderDetail {
@@ -106,12 +115,12 @@ namespace dex {
         uint64_t asset_amount           = 0;                 //!< amount of asset to buy/sell
         uint64_t price                  = 0;                //!< price in coinType want to buy/sell asset
         DexID dex_id                    = 0;                //!< dex id of operator
-        dex::PublicMode public_mode     = dex::ORDER_PUBLIC;//!< order public mode
-        optional<OperatorFeeRatios> opt_operator_fee_ratios;    //!< operator_fee_ratios, optional
+        optional<COrderOperatorParams> opt_operator_params; //!< operator params, optional
         CTxCord tx_cord                  = CTxCord();       //!< related tx cord
         CRegID user_regid                = CRegID();        //!< user regid
         uint64_t total_deal_coin_amount  = 0;               //!< total deal coin amount
         uint64_t total_deal_asset_amount = 0;               //!< total deal asset amount
+        CDEXOrderSrc    order_src;
 
     public:
         IMPLEMENT_SERIALIZE(
@@ -124,13 +133,13 @@ namespace dex {
             READWRITE(VARINT(asset_amount));
             READWRITE(VARINT(price));
             READWRITE(VARINT(dex_id));
-            READWRITE(opt_operator_fee_ratios);
+            READWRITE(opt_operator_params);
             READWRITE(tx_cord);
             READWRITE(user_regid);
             READWRITE(VARINT(total_deal_coin_amount));
             READWRITE(VARINT(total_deal_asset_amount));
-
-            READWRITE(tx_cord);
+            READWRITE(order_src.src_type);
+            READWRITE(order_src.src_id);
         )
 
         bool IsEmpty() const {
@@ -144,38 +153,6 @@ namespace dex {
         void ToJson(json_spirit::Object &obj) const;
     };
 
-
-    // for all active order db: orderId -> CDEXActiveOrder
-    struct CDEXActiveOrder {
-        OrderGenerateType generate_type     = EMPTY_ORDER;  //!< generate type
-        CTxCord  tx_cord                   = CTxCord();    //!< related tx cord
-        uint64_t total_deal_coin_amount    = 0;            //!< total deal coin amount
-        uint64_t total_deal_asset_amount   = 0;            //!< total deal asset amount
-
-        CDEXActiveOrder() {}
-
-        CDEXActiveOrder(OrderGenerateType generateType, const CTxCord &txCord):
-            generate_type(generateType), tx_cord(txCord)
-        {}
-
-        IMPLEMENT_SERIALIZE(
-            READWRITE((uint8_t&)generate_type);
-            READWRITE(tx_cord);
-            READWRITE(VARINT(total_deal_coin_amount));
-            READWRITE(VARINT(total_deal_asset_amount));
-        )
-
-        bool IsEmpty() const {
-            return generate_type == EMPTY_ORDER;
-        }
-        void SetEmpty() {
-            generate_type  = EMPTY_ORDER;
-            total_deal_coin_amount    = 0;
-            total_deal_asset_amount   = 0;
-            tx_cord.SetEmpty();
-        }
-    };
-
     // order txid -> sys order data
     // order txid:
     //   (1) CCDPStakeTx, create sys buy market order for WGRT by WUSD when alter CDP and the interest is WUSD
@@ -186,38 +163,45 @@ namespace dex {
     class CSysOrder {
     public:// create functions
         static shared_ptr<CDEXOrderDetail> CreateBuyMarketOrder(const CTxCord &txCord, const TokenSymbol &coinSymbol,
-            const TokenSymbol &assetSymbol, uint64_t coinAmountIn);
+            const TokenSymbol &assetSymbol, uint64_t coinAmountIn, const CDEXOrderSrc &src);
 
         static shared_ptr<CDEXOrderDetail> CreateSellMarketOrder(const CTxCord &txCord, const TokenSymbol &coinSymbol,
-            const TokenSymbol &assetSymbol, uint64_t assetAmountIn);
+            const TokenSymbol &assetSymbol, uint64_t assetAmountIn, const CDEXOrderSrc &src);
 
         static shared_ptr<CDEXOrderDetail> Create(OrderType orderType, OrderSide orderSide, const CTxCord &txCord,
-            const TokenSymbol &coinSymbol, const TokenSymbol &assetSymbol, uint64_t coiAmountIn, uint64_t assetAmountIn);
+            const TokenSymbol &coinSymbol, const TokenSymbol &assetSymbol, uint64_t coiAmountIn, uint64_t assetAmountIn,
+            const CDEXOrderSrc &src);
     };
 
 }
 
+typedef set<CVarIntValue<uint64_t>> DexOpIdValueSet;
+
 // dex operator
 struct DexOperatorDetail {
-    CRegID owner_regid;                   // owner uid of exchange
-    CRegID fee_receiver_regid;                   // match uid
+    CRegID owner_regid;                 // owner regid of exchange
+    CRegID fee_receiver_regid;          // fee receiver regid
     string name              = "";       // domain name
-    string portal_url        = "";
-    uint64_t maker_fee_ratio = 0;
-    uint64_t taker_fee_ratio = 0;
+    string portal_url        = "";       // portal url of dex operator
+    dex::OpenMode order_open_mode   = dex::OpenMode::PRIVATE; // the default public mode for creating order
+    uint64_t maker_fee_ratio = 0;    // the default maker fee ratio for creating order
+    uint64_t taker_fee_ratio = 0;    // the defalt taker fee ratio for creating order
+    DexOpIdValueSet order_open_dexop_set;  // the dex op set for order open mode
     string memo              = "";
-    bool activated           = false ;
+    bool activated           = false;
 
-    // TODO: state
+    static const DexOperatorDetail EMPTY_OBJ;
 
     IMPLEMENT_SERIALIZE(
         READWRITE(owner_regid);
         READWRITE(fee_receiver_regid);
         READWRITE(name);
         READWRITE(portal_url);
+        READWRITE_ENUM(order_open_mode, uint8_t);
         READWRITE(VARINT(maker_fee_ratio));
         READWRITE(VARINT(taker_fee_ratio));
-        READWRITE(activated) ;
+        READWRITE(order_open_dexop_set);
+        READWRITE(activated);
         READWRITE(memo);
     )
 
@@ -227,9 +211,10 @@ struct DexOperatorDetail {
     }
 
     void SetEmpty() {
-        owner_regid.SetEmpty(); fee_receiver_regid.SetEmpty(); name = ""; portal_url = ""; maker_fee_ratio = 0;
-        taker_fee_ratio = 0; memo = "";
+        *this = EMPTY_OBJ;
     }
+
+    string ToString() const;
 };
 
 #endif //ENTITIES_DEX_ORDER_H

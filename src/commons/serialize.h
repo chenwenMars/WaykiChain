@@ -31,8 +31,6 @@
 
 class CAutoFile;
 class CDataStream;
-class CBaseTx;
-class CProposal ;
 
 static const uint32_t MAX_SIZE           = 0x02000000;
 static const uint32_t MAX_SERIALIZE_SIZE = MAX_BLOCK_SIZE;
@@ -440,6 +438,8 @@ public:
 
     void SetEmpty() { n = 0; }
     friend bool operator<(const CVarIntValue&  c1 ,const CVarIntValue& c2) { return c1.n < c2.n; }
+
+    string ToString() const { return std::to_string(n); }
 };
 
 template<typename I>
